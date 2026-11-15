@@ -111,6 +111,7 @@ from .const import (
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
     CONF_EXCLUDED_SENSORS,
+    CONF_EXPAND_GROUPS,
     CONF_HEALTH_ENABLED,
     CONF_HUMIDITY_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
@@ -173,6 +174,7 @@ from .const import (
     DEFAULT_DECAY_ENABLED,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
+    DEFAULT_EXPAND_GROUPS,
     DEFAULT_HEALTH_ENABLED,
     DEFAULT_MEDIA_ACTIVE_STATES,
     DEFAULT_MIN_PRIOR_OVERRIDE,
@@ -1175,6 +1177,12 @@ def _create_basics_step_schema(
     ] = BooleanSelector()
     fields[
         vol.Optional(
+            CONF_EXPAND_GROUPS,
+            default=current.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+        )
+    ] = BooleanSelector()
+    fields[
+        vol.Optional(
             CONF_EXCLUDED_SENSORS,
             default=current.get(CONF_EXCLUDED_SENSORS, []),
         )
@@ -1597,7 +1605,11 @@ def _sync_discovered_and_excluded(
     if not area_id:
         return updated
 
-    discovered = discover_area_sensors(hass, area_id)
+    discovered = discover_area_sensors(
+        hass,
+        area_id,
+        expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+    )
     excluded: list[str] = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
     excluded_changed = False
 
@@ -2371,6 +2383,7 @@ class BaseOccupancyFlow:
                     CONF_PURPOSE,
                     CONF_ADJACENT_AREAS,
                     CONF_AUTO_DISCOVER_SENSORS,
+                    CONF_EXPAND_GROUPS,
                     CONF_EXCLUDED_SENSORS,
                 },
             )
@@ -2767,7 +2780,6 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         self._area_config_draft: dict[str, Any] = {}
         self._area_edit_section: str | None = None
         self._sensor_group_being_edited: str | None = None
-        self._initial_areas_populated: bool = False
         self._discovered_area_id: str | None = None
 
     def _get_active_entry(self) -> ConfigEntry | None:
@@ -2811,15 +2823,6 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
             # Config entry already exists - point to "Add an area" (#582)
             return self.async_abort(reason="already_configured")
 
-        if (
-            not self._initial_areas_populated
-            and not self._areas
-            and user_input is None
-            and self.hass
-        ):
-            self._initial_areas_populated = True
-            self._areas = discover_eligible_areas(self.hass)
-
         # If no areas exist yet, automatically start configuring the first area
         # This provides a smoother user experience - users don't need to click "Add New Area" first
         if not self._areas and user_input is None:
@@ -2833,16 +2836,9 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
             menu_options.append("manage_areas")
             menu_options.append("finish_setup")
 
-        area_names = ", ".join(
-            self._area_title(area.get(CONF_AREA_ID, "")) for area in self._areas
-        )
         return self.async_show_menu(
             step_id="user",
             menu_options=menu_options,
-            description_placeholders={
-                "area_count": str(len(self._areas)),
-                "area_names": area_names or "none",
-            },
         )
 
     async def async_step_manage_areas(

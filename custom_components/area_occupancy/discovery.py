@@ -35,6 +35,7 @@ from .const import (
     CONF_DECAY_HALF_LIFE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDED_SENSORS,
+    CONF_EXPAND_GROUPS,
     CONF_HUMIDITY_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
     CONF_LOCK_SENSORS,
@@ -52,6 +53,7 @@ from .const import (
     CONF_WINDOW_SENSORS,
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_DECAY_HALF_LIFE,
+    DEFAULT_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
     WEATHER_KEYWORDS,
@@ -109,6 +111,26 @@ ALL_AREA_SENSOR_KEYS: Final[tuple[str, ...]] = (
     CONF_APPLIANCES,
     CONF_WIFI_CLIENTS_SENSORS,
 )
+_KEY_EXPECTED_DOMAINS: Final[dict[str, str]] = {
+    CONF_MOTION_SENSORS: "binary_sensor",
+    CONF_DOOR_SENSORS: "binary_sensor",
+    CONF_WINDOW_SENSORS: "binary_sensor",
+    CONF_TEMPERATURE_SENSORS: "sensor",
+    CONF_HUMIDITY_SENSORS: "sensor",
+    CONF_ILLUMINANCE_SENSORS: "sensor",
+    CONF_CO2_SENSORS: "sensor",
+    CONF_CO_SENSORS: "sensor",
+    CONF_SOUND_PRESSURE_SENSORS: "sensor",
+    CONF_PRESSURE_SENSORS: "sensor",
+    CONF_AIR_QUALITY_SENSORS: "sensor",
+    CONF_VOC_SENSORS: "sensor",
+    CONF_PM25_SENSORS: "sensor",
+    CONF_PM10_SENSORS: "sensor",
+    CONF_POWER_SENSORS: "sensor",
+    CONF_MEDIA_DEVICES: "media_player",
+    CONF_LOCK_SENSORS: "lock",
+    CONF_COVER_SENSORS: "cover",
+}
 
 
 def is_weather_entity(entity_id: str, platform: str | None) -> bool:
@@ -119,13 +141,114 @@ def is_weather_entity(entity_id: str, platform: str | None) -> bool:
     return any(keyword in entity_lower for keyword in WEATHER_KEYWORDS)
 
 
+def _get_group_members(hass: HomeAssistant, entity_id: str) -> list[str] | None:
+    """Return member entity IDs if ``entity_id`` is a group, otherwise ``None``."""
+    state = hass.states.get(entity_id)
+    attrs = getattr(state, "attributes", None) if state else None
+    members = attrs.get("entity_id") if attrs else None
+    if not isinstance(members, (list, tuple)):
+        return None
+    return [member for member in members if isinstance(member, str) and "." in member]
+
+
+def _expand_group_entity(
+    hass: HomeAssistant,
+    entity_id: str,
+    required_domain: str | None = None,
+    _visited: set[str] | None = None,
+) -> list[str]:
+    """Expand a group entity recursively into domain-filtered member entity IDs."""
+    visited = _visited if _visited is not None else set()
+    if entity_id in visited:
+        return []
+    visited.add(entity_id)
+
+    members = _get_group_members(hass, entity_id)
+    if members is None:
+        if (
+            required_domain is not None
+            and entity_id.split(".", 1)[0] != required_domain
+        ):
+            return []
+        return [entity_id]
+
+    effective_domain = required_domain
+    group_domain = entity_id.split(".", 1)[0]
+    if effective_domain is None and group_domain != "group":
+        effective_domain = group_domain
+
+    expanded: list[str] = []
+    for member_id in members:
+        expanded.extend(
+            _expand_group_entity(
+                hass, member_id, required_domain=effective_domain, _visited=visited
+            )
+        )
+    return list(dict.fromkeys(expanded))
+
+
+def _classify_entity(
+    hass: HomeAssistant,
+    registry: er.EntityRegistry,
+    entity_id: str,
+    *,
+    entry: er.RegistryEntry | None = None,
+    fallback_domain: str | None = None,
+    fallback_device_class: str | None = None,
+) -> str | None:
+    """Classify an entity ID into a sensor config key, or ``None`` if ineligible."""
+    if entry is None:
+        entities = getattr(registry, "entities", None)
+        if isinstance(entities, dict):
+            entry = entities.get(entity_id)
+        elif hasattr(registry, "async_get"):
+            entry = registry.async_get(entity_id)
+    if entry is not None:
+        if (
+            entry.platform == DOMAIN
+            or is_weather_entity(entry.entity_id, entry.platform)
+            or entry.disabled_by is not None
+            or entry.hidden_by is not None
+            or entry.entity_category is not None
+        ):
+            return None
+        domain = entry.domain
+        entry_dc = entry.device_class
+        orig_dc = entry.original_device_class
+    else:
+        if is_weather_entity(entity_id, None):
+            return None
+        domain = entity_id.split(".", 1)[0]
+        entry_dc = None
+        orig_dc = None
+
+    state = hass.states.get(entity_id)
+    attrs = getattr(state, "attributes", None) if state else None
+    state_dc = attrs.get("device_class") if attrs else None
+    device_class = (
+        entry_dc
+        or state_dc
+        or orig_dc
+        or (fallback_device_class if domain == fallback_domain else None)
+    )
+    if domain == "binary_sensor":
+        return _BINARY_CLASSES.get(device_class)
+    if domain == "sensor":
+        return _NUMERIC_CLASSES.get(device_class)
+    return _DOMAINS.get(domain)
+
+
 def discover_area_sensors(
-    hass: HomeAssistant, area_id: str | None
+    hass: HomeAssistant,
+    area_id: str | None,
+    *,
+    expand_groups: bool = DEFAULT_EXPAND_GROUPS,
 ) -> dict[str, list[str]]:
     """Return eligible discoverable entities grouped by sensor config key for an area.
 
     Disabled, hidden, diagnostic/config, integration-owned, and outdoor weather
-    entities are excluded.
+    entities are excluded. When ``expand_groups`` is enabled, group entities are
+    replaced by their domain-filtered member entities.
     """
     if not area_id:
         return {}
@@ -149,19 +272,38 @@ def discover_area_sensors(
         if entry_area_id != area_id:
             continue
 
-        state = hass.states.get(entry.entity_id)
-        device_class = (
-            entry.device_class
-            or (state.attributes.get("device_class") if state else None)
-            or entry.original_device_class
-        )
-        key = _DOMAINS.get(entry.domain)
-        if entry.domain == "binary_sensor":
-            key = _BINARY_CLASSES.get(device_class)
-        elif entry.domain == "sensor":
-            key = _NUMERIC_CLASSES.get(device_class)
+        if expand_groups and _get_group_members(hass, entry.entity_id) is not None:
+            required_domain = entry.domain if entry.domain != "group" else None
+            group_state = hass.states.get(entry.entity_id)
+            group_attrs = (
+                getattr(group_state, "attributes", None) if group_state else None
+            )
+            group_dc = (
+                entry.device_class
+                or (group_attrs.get("device_class") if group_attrs else None)
+                or entry.original_device_class
+            )
+            for member_id in _expand_group_entity(
+                hass, entry.entity_id, required_domain=required_domain
+            ):
+                key = _classify_entity(
+                    hass,
+                    registry,
+                    member_id,
+                    fallback_domain=entry.domain,
+                    fallback_device_class=group_dc,
+                )
+                if key is not None:
+                    target = discovered.setdefault(key, [])
+                    if member_id not in target:
+                        target.append(member_id)
+            continue
+
+        key = _classify_entity(hass, registry, entry.entity_id, entry=entry)
         if key is not None:
-            discovered.setdefault(key, []).append(entry.entity_id)
+            target = discovered.setdefault(key, [])
+            if entry.entity_id not in target:
+                target.append(entry.entity_id)
 
     return discovered
 
@@ -169,12 +311,30 @@ def discover_area_sensors(
 def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Merge discovered inputs into a copy of the area's manual selections.
 
-    Auto-discovery defaults to enabled unless explicitly set to ``False``.
-    Exclusions always strip matching entities from every sensor list (including
-    previously saved manual selections). Explicit non-excluded custom
-    classifications still avoid duplicate auto-discovery under another key.
+    Auto-discovery and group expansion default to enabled unless explicitly
+    set to ``False``. Exclusions always strip matching entities from every
+    sensor list (including previously saved manual selections and expanded
+    group members).
     """
     resolved = dict(data)
+    expand_groups = data.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS)
+    if expand_groups:
+        for key in ALL_AREA_SENSOR_KEYS:
+            existing = resolved.get(key)
+            if isinstance(existing, list):
+                expected_domain = _KEY_EXPECTED_DOMAINS.get(key)
+                expanded: list[str] = []
+                for entity_id in existing:
+                    if _get_group_members(hass, entity_id) is not None:
+                        expanded.extend(
+                            _expand_group_entity(
+                                hass, entity_id, required_domain=expected_domain
+                            )
+                        )
+                    else:
+                        expanded.append(entity_id)
+                resolved[key] = list(dict.fromkeys(expanded))
+
     excluded = set(data.get(CONF_EXCLUDED_SENSORS) or [])
     if excluded:
         for key in ALL_AREA_SENSOR_KEYS:
@@ -192,7 +352,9 @@ def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     manual = {
         entity_id for key in ALL_AREA_SENSOR_KEYS for entity_id in resolved.get(key, [])
     }
-    discovered = discover_area_sensors(hass, data[CONF_AREA_ID])
+    discovered = discover_area_sensors(
+        hass, data[CONF_AREA_ID], expand_groups=expand_groups
+    )
     for key, entity_ids in discovered.items():
         additions = [
             entity_id
@@ -222,6 +384,7 @@ def build_suggested_area_config(
         CONF_AREA_ID: area_id,
         CONF_PURPOSE: infer_purpose_from_name(area_name),
         CONF_AUTO_DISCOVER_SENSORS: DEFAULT_AUTO_DISCOVER_SENSORS,
+        CONF_EXPAND_GROUPS: DEFAULT_EXPAND_GROUPS,
         CONF_DECAY_HALF_LIFE: DEFAULT_DECAY_HALF_LIFE,
     }
 

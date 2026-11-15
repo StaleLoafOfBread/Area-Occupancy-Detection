@@ -90,6 +90,7 @@ CONF_ADJACENT_AREAS: Final = (
 )
 CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
 CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
+CONF_EXPAND_GROUPS: Final = "expand_groups"
 CONF_MOTION_SENSORS: Final = "motion_sensors"
 CONF_MOTION_PROB_GIVEN_TRUE: Final = "motion_prob_given_true"
 CONF_MOTION_PROB_GIVEN_FALSE: Final = "motion_prob_given_false"
@@ -169,6 +170,7 @@ CONF_WEIGHT_WASP: Final = "weight_wasp"
 
 # Default values
 DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
+DEFAULT_EXPAND_GROUPS: Final[bool] = True
 DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose

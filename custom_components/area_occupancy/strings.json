@@ -13,7 +13,7 @@
         "step": {
             "user": {
                 "title": "Area Occupancy Detection",
-                "description": "Ready to set up {area_count} area(s): {area_names}. Choose **Finish Setup** to create them, **Manage Areas** to edit or remove any area, or **Add New Area** to add another room.",
+                "description": "Select an area to manage or choose an action. At least one area must be configured before finishing setup.",
                 "menu_options": {
                     "add_area": "Add New Area",
                     "manage_areas": "Manage Areas",
@@ -266,6 +266,7 @@
                     "purpose": "Area Purpose",
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
+                    "expand_groups": "Expand groups into member entities",
                     "excluded_sensors": "Exclude from automatic discovery"
                 },
                 "data_description": {
@@ -273,6 +274,7 @@
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
                     "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             },
@@ -508,11 +510,13 @@
                 "data": {
                     "purpose": "Area Purpose",
                     "auto_discover_sensors": "Automatically discover sensors",
+                    "expand_groups": "Expand groups into member entities",
                     "excluded_sensors": "Exclude from automatic discovery"
                 },
                 "data_description": {
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
                     "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             }
@@ -803,6 +807,7 @@
                     "purpose": "Area Purpose",
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
+                    "expand_groups": "Expand groups into member entities",
                     "excluded_sensors": "Exclude from automatic discovery"
                 },
                 "data_description": {
@@ -810,6 +815,7 @@
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
                     "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             },
@@ -1273,6 +1279,7 @@
                         "purpose": "Area Purpose",
                         "adjacent_areas": "Adjacent Areas",
                         "auto_discover_sensors": "Automatically discover sensors",
+                        "expand_groups": "Expand groups into member entities",
                         "excluded_sensors": "Exclude from automatic discovery"
                     },
                     "data_description": {
@@ -1280,6 +1287,7 @@
                         "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                         "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                         "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                        "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
                         "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                     }
                 },

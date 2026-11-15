@@ -11,8 +11,12 @@ import pytest
 from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
     CONF_AUTO_DISCOVER_SENSORS,
+    CONF_DOOR_SENSORS,
+    CONF_EXCLUDED_SENSORS,
+    CONF_EXPAND_GROUPS,
     CONF_MOTION_SENSORS,
     CONF_PURPOSE,
+    CONF_TEMPERATURE_SENSORS,
     DEFAULT_PURPOSE,
     SUBENTRY_TYPE_AREA,
 )
@@ -478,3 +482,187 @@ def test_async_trigger_area_discoveries_creates_and_aborts() -> None:
         for call in mock_create_flow.call_args_list
     )
     hass.config_entries.flow.async_abort.assert_called_once_with("flow_stale")
+
+
+def _make_group_hass(
+    entities: list[SimpleNamespace],
+    states: dict[str, dict[str, Any]],
+) -> Any:
+    """Create a lightweight fake hass with entity registry and state attributes."""
+    ent_map = {item.entity_id: item for item in entities}
+    registry = SimpleNamespace(entities=ent_map, async_get=ent_map.get)
+    devices = SimpleNamespace(async_get=lambda _device_id: None)
+    state_objs = {
+        eid: SimpleNamespace(attributes=attrs) for eid, attrs in states.items()
+    }
+    return (
+        SimpleNamespace(states=SimpleNamespace(get=state_objs.get)),
+        registry,
+        devices,
+    )
+
+
+def _reg_entry(
+    entity_id: str,
+    *,
+    area_id: str | None = None,
+    device_class: str | None = None,
+) -> SimpleNamespace:
+    domain = entity_id.split(".", 1)[0]
+    return SimpleNamespace(
+        entity_id=entity_id,
+        domain=domain,
+        platform="test",
+        area_id=area_id,
+        device_id=None,
+        device_class=device_class,
+        original_device_class=device_class,
+        disabled_by=None,
+        hidden_by=None,
+        entity_category=None,
+    )
+
+
+def test_expand_groups_replaces_binary_sensor_group_and_filters_domain() -> None:
+    """Binary sensor groups expand to binary_sensor members only and drop the group."""
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            _reg_entry(
+                "binary_sensor.kitchen_motion_group",
+                area_id="kitchen",
+                device_class="motion",
+            ),
+            _reg_entry("binary_sensor.pir_1", device_class="motion"),
+            _reg_entry("binary_sensor.pir_2"),
+            _reg_entry("media_player.tv"),
+        ],
+        states={
+            "binary_sensor.kitchen_motion_group": {
+                "device_class": "motion",
+                "entity_id": [
+                    "binary_sensor.pir_1",
+                    "switch.fan",
+                    "media_player.tv",
+                    "binary_sensor.pir_2",
+                ],
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(hass, {CONF_AREA_ID: "kitchen"})
+
+    assert resolved[CONF_MOTION_SENSORS] == [
+        "binary_sensor.pir_1",
+        "binary_sensor.pir_2",
+    ]
+    assert "binary_sensor.kitchen_motion_group" not in resolved[CONF_MOTION_SENSORS]
+    assert "media_devices" not in resolved
+
+
+def test_expand_groups_handles_nested_cycles_and_legacy_group() -> None:
+    """Legacy group.* entities expand recursively with cycle protection."""
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            _reg_entry("group.room_sensors", area_id="office"),
+            _reg_entry("binary_sensor.door_1", device_class="door"),
+            _reg_entry("binary_sensor.pir_1", device_class="motion"),
+            _reg_entry("sensor.room_temp", device_class="temperature"),
+        ],
+        states={
+            "group.room_sensors": {
+                "entity_id": [
+                    "group.nested",
+                    "binary_sensor.door_1",
+                    "sensor.room_temp",
+                ]
+            },
+            "group.nested": {
+                "entity_id": ["group.room_sensors", "binary_sensor.pir_1"]
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(hass, {CONF_AREA_ID: "office"})
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.pir_1"]
+    assert resolved[CONF_DOOR_SENSORS] == ["binary_sensor.door_1"]
+    assert resolved[CONF_TEMPERATURE_SENSORS] == ["sensor.room_temp"]
+
+
+def test_expand_groups_manual_list_filters_domain_and_respects_exclusions() -> None:
+    """Manually configured groups expand, filter by key domain, and honor exclusions."""
+    hass, _, _ = _make_group_hass(
+        entities=[],
+        states={
+            "binary_sensor.motion_group": {
+                "entity_id": [
+                    "binary_sensor.pir_a",
+                    "binary_sensor.pir_b",
+                    "light.lamp",
+                ]
+            }
+        },
+    )
+    resolved = resolve_area_sensors(
+        hass,
+        {
+            CONF_AREA_ID: "hall",
+            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_MOTION_SENSORS: ["binary_sensor.motion_group"],
+            CONF_EXCLUDED_SENSORS: ["binary_sensor.pir_b"],
+        },
+    )
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.pir_a"]
+
+
+def test_expand_groups_disabled_uses_group_entity() -> None:
+    """Disabling expand_groups keeps the group entity directly without expanding."""
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            _reg_entry(
+                "binary_sensor.kitchen_motion_group",
+                area_id="kitchen",
+                device_class="motion",
+            ),
+            _reg_entry("binary_sensor.pir_1", device_class="motion"),
+        ],
+        states={
+            "binary_sensor.kitchen_motion_group": {
+                "device_class": "motion",
+                "entity_id": ["binary_sensor.pir_1"],
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass, {CONF_AREA_ID: "kitchen", CONF_EXPAND_GROUPS: False}
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.kitchen_motion_group"]

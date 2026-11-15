@@ -3184,17 +3184,14 @@ def _register_area_with_motion(
     return area.id
 
 
-async def test_user_step_prepopulates_eligible_areas_and_finishes_setup(
+async def test_user_step_does_not_auto_add_areas_and_triggers_discovery(
     hass: HomeAssistant,
 ) -> None:
-    """Initial user setup pre-populates all eligible areas with inferred purposes."""
-
+    """Initial user setup opens the first-area wizard without auto-adding all areas."""
     kitchen_id = _register_area_with_motion(
         hass, "Kitchen", "binary_sensor.kitchen_motion"
     )
-    bedroom_id = _register_area_with_motion(
-        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
-    )
+    _register_area_with_motion(hass, "Master Bedroom", "binary_sensor.bedroom_motion")
     _register_area_with_motion(hass, "Hall Closet", None)
 
     flow = AreaOccupancyConfigFlow()
@@ -3202,20 +3199,13 @@ async def test_user_step_prepopulates_eligible_areas_and_finishes_setup(
     flow.context = {"source": "user"}
 
     result = await flow.async_step_user()
-    assert result["type"] == FlowResultType.MENU
-    assert result["step_id"] == "user"
-    assert result["description_placeholders"] == {
-        "area_count": "2",
-        "area_names": "Kitchen, Master Bedroom",
-    }
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "area_basics"
+    assert flow._areas == []
+    assert flow._area_config_draft[CONF_AREA_ID] == kitchen_id
+    assert flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name("Kitchen")
 
-    by_area = {area[CONF_AREA_ID]: area for area in flow._areas}
-    assert set(by_area) == {kitchen_id, bedroom_id}
-    assert by_area[kitchen_id][CONF_PURPOSE] == infer_purpose_from_name("Kitchen")
-    assert by_area[bedroom_id][CONF_PURPOSE] == infer_purpose_from_name(
-        "Master Bedroom"
-    )
-
+    flow._areas = [create_area_config(area_id=kitchen_id)]
     with patch(
         "custom_components.area_occupancy.config_flow.async_trigger_area_discoveries",
     ) as mock_trigger:
@@ -3223,12 +3213,9 @@ async def test_user_step_prepopulates_eligible_areas_and_finishes_setup(
 
     assert finish["type"] == FlowResultType.CREATE_ENTRY
     subentries = finish["subentries"]
-    assert len(subentries) == 2
-    assert {sub["data"][CONF_AREA_ID] for sub in subentries} == {
-        kitchen_id,
-        bedroom_id,
-    }
-    assert all(sub["subentry_type"] == SUBENTRY_TYPE_AREA for sub in subentries)
+    assert len(subentries) == 1
+    assert subentries[0]["data"][CONF_AREA_ID] == kitchen_id
+    assert subentries[0]["subentry_type"] == SUBENTRY_TYPE_AREA
     mock_trigger.assert_called_once_with(hass)
 
 
