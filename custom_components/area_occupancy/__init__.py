@@ -798,5 +798,10 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 }
             )
         )
+        if coordinator.db is not None:
+            try:
+                await hass.async_add_executor_job(coordinator.db.save_data)
+            except Exception:
+                _LOGGER.exception("Failed to save updated area entities to database")
         await coordinator.async_request_refresh()
         _async_sync_wasp_deprecation_issue(hass, coordinator)

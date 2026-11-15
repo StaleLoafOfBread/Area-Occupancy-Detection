@@ -168,6 +168,7 @@ CONF_WEIGHT_CUSTOM_NUMERIC: Final = "weight_custom_numeric"
 CONF_WEIGHT_WASP: Final = "weight_wasp"
 
 # Default values
+DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose
 DEFAULT_DECAY_ENABLED: Final = True
@@ -773,3 +774,24 @@ DURATION_FIELDS: Final[set[str]] = {
     CONF_WASP_MOTION_TIMEOUT,
     CONF_WASP_VERIFICATION_DELAY,
 }
+
+# Outdoor weather integrations and entity_id keywords excluded from indoor sensor discovery.
+WEATHER_PLATFORMS: Final[frozenset[str]] = frozenset(
+    {
+        "weather",
+        "met",
+        "openweathermap",
+        "accuweather",
+        "weatherflow",
+        "pirateweather",
+        "darksky",
+        "buienradar",
+        "bom",
+        "weatherkit",
+        "metoffice",
+        "nws",
+        "dwd",  # Deutscher Wetterdienst (German Weather Service) - official integration
+        "dwd_weather",  # DWD Weather by FL550 - HACS custom integration
+    }
+)
+WEATHER_KEYWORDS: Final[tuple[str, ...]] = ("weather", "forecast")

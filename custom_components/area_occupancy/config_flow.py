@@ -164,6 +164,7 @@ from .const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_APPLIANCE_ACTIVE_STATES,
+    DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_COVER_ACTIVE_STATES,
     DEFAULT_CUSTOM_BINARY_ACTIVE_STATES,
     DEFAULT_CUSTOM_NUMERIC_ACTIVE_MAX,
@@ -209,7 +210,12 @@ from .const import (
     get_state_options,
 )
 from .data.purpose import AreaPurpose, Purpose, get_purpose_options
-from .discovery import resolve_area_sensors
+from .discovery import (
+    ALL_AREA_SENSOR_KEYS,
+    discover_area_sensors,
+    is_weather_entity,
+    resolve_area_sensors,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -264,6 +270,21 @@ ENVIRONMENTAL_SENSOR_KEYS: tuple[str, ...] = (
     CONF_PM25_SENSORS,
     CONF_PM10_SENSORS,
 )
+
+SENSOR_GROUP_KEYS: dict[str, tuple[str, ...]] = {
+    "windows_and_doors": (
+        CONF_DOOR_SENSORS,
+        CONF_LOCK_SENSORS,
+        CONF_WINDOW_SENSORS,
+        CONF_COVER_SENSORS,
+    ),
+    "media": (CONF_MEDIA_DEVICES,),
+    "appliances": (CONF_APPLIANCES,),
+    "environmental": ENVIRONMENTAL_SENSOR_KEYS,
+    "power": (CONF_POWER_SENSORS,),
+    "wifi_clients": (CONF_WIFI_CLIENTS_SENSORS,),
+    "custom": (CONF_CUSTOM_BINARY_SENSORS, CONF_CUSTOM_NUMERIC_SENSORS),
+}
 
 
 def _format_seconds(seconds: float) -> str:
@@ -325,34 +346,7 @@ def _is_weather_entity(entity_id: str, platform: str | None) -> bool:
     Returns:
         True if entity is from a weather integration
     """
-    # List of weather integration platforms to exclude
-    weather_platforms = {
-        "weather",
-        "met",
-        "openweathermap",
-        "accuweather",
-        "weatherflow",
-        "pirateweather",
-        "darksky",
-        "buienradar",
-        "bom",
-        "weatherkit",
-        "metoffice",
-        "nws",
-        "dwd",  # Deutscher Wetterdienst (German Weather Service) - official integration
-        "dwd_weather",  # DWD Weather by FL550 - HACS custom integration
-    }
-
-    # Check if platform is a known weather integration
-    if platform and platform.lower() in weather_platforms:
-        return True
-
-    # Check if entity_id contains weather-related keywords
-    # (as a fallback for entities without platform info)
-    # Note: "outdoor" intentionally excluded - too generic, could catch legitimate sensors
-    entity_lower = entity_id.lower()
-    weather_keywords = ["weather", "forecast"]
-    return any(keyword in entity_lower for keyword in weather_keywords)
+    return is_weather_entity(entity_id, platform)
 
 
 def _get_include_entities(hass: HomeAssistant) -> dict[str, list[str]]:
@@ -1169,7 +1163,9 @@ def _create_basics_step_schema(
     fields[
         vol.Optional(
             CONF_AUTO_DISCOVER_SENSORS,
-            default=current.get(CONF_AUTO_DISCOVER_SENSORS, not is_editing),
+            default=current.get(
+                CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS
+            ),
         )
     ] = BooleanSelector()
     fields[
@@ -1201,7 +1197,7 @@ def _create_motion_step_schema(
         include_entities = _get_include_entities(hass)
 
     fields: dict[vol.Marker, Any] = {
-        vol.Required(CONF_MOTION_SENSORS, default=[]): EntitySelector(
+        vol.Optional(CONF_MOTION_SENSORS, default=[]): EntitySelector(
             EntitySelectorConfig(
                 include_entities=include_entities["motion"],
                 multiple=True,
@@ -1565,6 +1561,69 @@ def _draft_to_suggested(draft: dict[str, Any], keys: set[str]) -> dict[str, Any]
     return suggested
 
 
+def _strip_excluded_sensors_from_draft(
+    draft: dict[str, Any], excluded: set[str]
+) -> dict[str, Any]:
+    """Return updated sensor list entries with excluded entities removed."""
+    if not excluded:
+        return {}
+    stripped: dict[str, Any] = {}
+    for key in ALL_AREA_SENSOR_KEYS:
+        existing = draft.get(key)
+        if isinstance(existing, list) and any(item in excluded for item in existing):
+            stripped[key] = [item for item in existing if item not in excluded]
+    return stripped
+
+
+def _sync_discovered_and_excluded(
+    hass: HomeAssistant | None,
+    draft: dict[str, Any],
+    submitted: dict[str, Any],
+    sensor_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    """Sync form sensor selections with auto-discovered and excluded sensors."""
+    updated = dict(submitted)
+    if not hass or not draft.get(
+        CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS
+    ):
+        return updated
+
+    area_id = draft.get(CONF_AREA_ID)
+    if not area_id:
+        return updated
+
+    discovered = discover_area_sensors(hass, area_id)
+    excluded: list[str] = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
+    excluded_changed = False
+
+    for key in sensor_keys:
+        if key not in updated:
+            continue
+        chosen = list(updated.get(key) or [])
+        chosen_set = set(chosen)
+        disc_for_key = discovered.get(key, [])
+        disc_set = set(disc_for_key)
+
+        for entity_id in disc_for_key:
+            if entity_id not in chosen_set and entity_id not in excluded:
+                excluded.append(entity_id)
+                excluded_changed = True
+
+        for entity_id in chosen:
+            if entity_id in excluded:
+                excluded.remove(entity_id)
+                excluded_changed = True
+
+        if disc_set:
+            updated[key] = [
+                entity_id for entity_id in chosen if entity_id not in disc_set
+            ]
+
+    if excluded_changed or CONF_EXCLUDED_SENSORS in draft:
+        updated[CONF_EXCLUDED_SENSORS] = excluded
+    return updated
+
+
 def _resolve_area_id_to_name(hass: HomeAssistant, area_id: str) -> str:
     """Resolve area ID to area name for display.
 
@@ -1803,7 +1862,9 @@ def _create_area_selector_schema(
             # Fallback to area_id if we can't resolve
             area_name = area_id
 
-        summary = _get_area_summary_info(area)
+        summary = _get_area_summary_info(
+            resolve_area_sensors(hass, area) if hass else area
+        )
         # Use area_id for option value (sanitized)
         sanitized_id = area_id.replace(" ", "_").replace("/", "_")
         # Include summary in label for better UX
@@ -2260,12 +2321,20 @@ class BaseOccupancyFlow:
                 )
 
             if not errors:
+                updates = dict(user_input)
+                if CONF_EXCLUDED_SENSORS in updates:
+                    excluded_set = set(updates.get(CONF_EXCLUDED_SENSORS) or [])
+                    updates.update(
+                        _strip_excluded_sensors_from_draft(
+                            self._area_config_draft, excluded_set
+                        )
+                    )
                 if self._editing_single_section:
-                    errors, result = await self._complete_section_edit(user_input)
+                    errors, result = await self._complete_section_edit(updates)
                     if result is not None:
                         return result
                 else:
-                    self._area_config_draft.update(user_input)
+                    self._area_config_draft.update(updates)
                     return await self.async_step_area_motion()
 
         adjacent_options = self._build_adjacent_area_options()
@@ -2323,9 +2392,13 @@ class BaseOccupancyFlow:
 
         if user_input is not None:
             flattened = flatten_sectioned_input(user_input)
+            flattened = _sync_discovered_and_excluded(
+                self.hass, self._area_config_draft, flattened, (CONF_MOTION_SENSORS,)
+            )
 
-            effective = resolve_area_sensors(
-                self.hass, {**self._area_config_draft, **flattened}
+            candidate = {**self._area_config_draft, **flattened}
+            effective = (
+                resolve_area_sensors(self.hass, candidate) if self.hass else candidate
             )
             if not effective.get(CONF_MOTION_SENSORS):
                 errors["base"] = "motion_required"
@@ -2362,7 +2435,12 @@ class BaseOccupancyFlow:
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(base_schema, user_input)
         else:
-            suggested = _draft_to_suggested(self._area_config_draft, motion_keys)
+            resolved_draft = (
+                resolve_area_sensors(self.hass, self._area_config_draft)
+                if self.hass
+                else self._area_config_draft
+            )
+            suggested = _draft_to_suggested(resolved_draft, motion_keys)
             if suggested:
                 data_schema = self.add_suggested_values_to_schema(
                     base_schema, suggested
@@ -2386,14 +2464,28 @@ class BaseOccupancyFlow:
         """Wizard step 3: Additional sensor configuration (sections)."""
         errors: dict[str, str] = {}
 
+        groups: tuple[str, ...] = (
+            (self._sensor_group_being_edited,)
+            if self._sensor_group_being_edited
+            else SENSOR_GROUPS
+        )
+        active_sensor_keys = tuple(
+            key for group in groups for key in SENSOR_GROUP_KEYS.get(group, ())
+        )
+
         if user_input is not None:
             flattened = flatten_sectioned_input(user_input)
+            flattened = _sync_discovered_and_excluded(
+                self.hass, self._area_config_draft, flattened, active_sensor_keys
+            )
 
             # Validate here, while the fields are on screen: a sensor-state
             # error raised on a later step has no field to show against.
-            errors.update(
-                validate_sensor_states({**self._area_config_draft, **flattened})
+            candidate = {**self._area_config_draft, **flattened}
+            effective = (
+                resolve_area_sensors(self.hass, candidate) if self.hass else candidate
             )
+            errors.update(validate_sensor_states(effective))
 
             if not errors:
                 if self._editing_single_section:
@@ -2404,11 +2496,6 @@ class BaseOccupancyFlow:
                     self._area_config_draft.update(flattened)
                     return await self.async_step_area_behavior()
 
-        groups: tuple[str, ...] = (
-            (self._sensor_group_being_edited,)
-            if self._sensor_group_being_edited
-            else SENSOR_GROUPS
-        )
         schema_dict = _create_sensors_step_schema(self.hass, groups=groups)
         base_schema = vol.Schema(schema_dict)
 
@@ -2416,7 +2503,12 @@ class BaseOccupancyFlow:
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(base_schema, user_input)
         elif self._area_config_draft:
-            nested = _nest_config_for_sections(self._area_config_draft)
+            resolved_draft = (
+                resolve_area_sensors(self.hass, self._area_config_draft)
+                if self.hass
+                else self._area_config_draft
+            )
+            nested = _nest_config_for_sections(resolved_draft)
             suggested = {k: v for k, v in nested.items() if k in groups}
             if suggested:
                 data_schema = self.add_suggested_values_to_schema(

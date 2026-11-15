@@ -2468,7 +2468,7 @@ class TestSectionEditing:
         assert schema({}) == {
             CONF_PURPOSE: "sleeping",
             CONF_ADJACENT_AREAS: ["kitchen"],
-            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_AUTO_DISCOVER_SENSORS: True,
             CONF_EXCLUDED_SENSORS: [],
         }
 
@@ -2477,7 +2477,7 @@ class TestSectionEditing:
 
         assert schema({}) == {
             CONF_PURPOSE: DEFAULT_PURPOSE,
-            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_AUTO_DISCOVER_SENSORS: True,
             CONF_EXCLUDED_SENSORS: [],
         }
 
@@ -3032,7 +3032,7 @@ class TestAlreadyConfigured:
     ("is_editing", "current", "expected"),
     [
         (False, None, True),
-        (True, {}, False),
+        (True, {}, True),
         (True, {CONF_AUTO_DISCOVER_SENSORS: True}, True),
         (True, {CONF_AUTO_DISCOVER_SENSORS: False}, False),
     ],
@@ -3064,3 +3064,94 @@ async def test_automatic_motion_satisfies_wizard(
         await flow.async_step_area_motion({CONF_MOTION_SENSORS: []})
     next_step.assert_awaited_once()
     assert flow._area_config_draft[CONF_MOTION_SENSORS] == []
+
+
+async def test_motion_step_prepopulates_discovered_and_excludes_removed(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {CONF_AREA_ID: "room", CONF_AUTO_DISCOVER_SENSORS: True}
+    discovered = {
+        CONF_MOTION_SENSORS: [
+            "binary_sensor.motion_auto_1",
+            "binary_sensor.motion_auto_2",
+        ]
+    }
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            return_value=discovered,
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value=discovered,
+        ),
+    ):
+        form = await flow.async_step_area_motion()
+        motion_marker = next(
+            k for k in form["data_schema"].schema if k.schema == CONF_MOTION_SENSORS
+        )
+        assert motion_marker.description == {
+            "suggested_value": [
+                "binary_sensor.motion_auto_1",
+                "binary_sensor.motion_auto_2",
+            ]
+        }
+
+        with patch.object(
+            flow, "async_step_area_sensors", new_callable=AsyncMock
+        ) as next_step:
+            await flow.async_step_area_motion(
+                {CONF_MOTION_SENSORS: ["binary_sensor.motion_auto_1"]}
+            )
+
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft[CONF_EXCLUDED_SENSORS] == [
+        "binary_sensor.motion_auto_2"
+    ]
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == []
+
+
+async def test_sensors_step_prepopulates_discovered_and_excludes_removed(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {
+        CONF_AREA_ID: "room",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_MOTION_SENSORS: ["binary_sensor.motion1"],
+    }
+    discovered = {CONF_TEMPERATURE_SENSORS: ["sensor.temp_auto", "sensor.temp_ignore"]}
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            return_value=discovered,
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value=discovered,
+        ),
+    ):
+        form = await flow.async_step_area_sensors()
+        env_section = next(
+            v
+            for k, v in form["data_schema"].schema.items()
+            if k.schema == "environmental"
+        )
+        temp_marker = next(
+            k for k in env_section.schema.schema if k.schema == CONF_TEMPERATURE_SENSORS
+        )
+        assert temp_marker.description == {
+            "suggested_value": ["sensor.temp_auto", "sensor.temp_ignore"]
+        }
+
+        with patch.object(
+            flow, "async_step_area_behavior", new_callable=AsyncMock
+        ) as next_step:
+            await flow.async_step_area_sensors(
+                {"environmental": {CONF_TEMPERATURE_SENSORS: ["sensor.temp_auto"]}}
+            )
+
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft[CONF_EXCLUDED_SENSORS] == ["sensor.temp_ignore"]
+    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == []

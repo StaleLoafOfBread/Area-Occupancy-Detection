@@ -12,6 +12,7 @@ from custom_components.area_occupancy.discovery import (
     async_track_discovery,
     resolve_area_sensors,
 )
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 
 
 def entity(entity_id: str, **kwargs: object) -> SimpleNamespace:
@@ -46,11 +47,18 @@ def resolve(data: dict[str, Any], *entries: SimpleNamespace) -> dict[str, Any]:
         return resolve_area_sensors(hass, data)
 
 
-@pytest.mark.parametrize("enabled", [None, False])
-def test_existing_area_is_manual(enabled: bool | None) -> None:
+def test_discovery_enabled_by_default() -> None:
     data = {"area_id": "room", "motion_sensors": ["binary_sensor.manual"]}
-    if enabled is not None:
-        data["auto_discover_sensors"] = enabled
+    result = resolve(data, entity("binary_sensor.new", device_class="motion"))
+    assert result["motion_sensors"] == ["binary_sensor.manual", "binary_sensor.new"]
+
+
+def test_disabling_discovery_stays_manual() -> None:
+    data = {
+        "area_id": "room",
+        "auto_discover_sensors": False,
+        "motion_sensors": ["binary_sensor.manual"],
+    }
     assert resolve(data, entity("binary_sensor.new", device_class="motion")) == data
 
 
@@ -64,7 +72,9 @@ def test_existing_area_is_manual(enabled: bool | None) -> None:
         ("binary_sensor.window", "window", "window_sensors"),
         ("sensor.temperature", "temperature", "temperature_sensors"),
         ("sensor.humidity", "humidity", "humidity_sensors"),
+        ("sensor.moisture", "moisture", "humidity_sensors"),
         ("sensor.power", "power", "power_sensors"),
+        ("sensor.current", "current", "power_sensors"),
         ("sensor.co2", "carbon_dioxide", "co2_sensors"),
         ("sensor.co", "carbon_monoxide", "co_sensors"),
         ("sensor.sound", "sound_pressure", "sound_pressure_sensors"),
@@ -103,6 +113,7 @@ def test_device_area_and_entity_override() -> None:
     "overrides",
     [
         {"platform": "area_occupancy"},
+        {"platform": "weather", "original_device_class": "temperature"},
         {"disabled_by": "user"},
         {"hidden_by": "user"},
         {"entity_category": "diagnostic"},
@@ -111,25 +122,56 @@ def test_device_area_and_entity_override() -> None:
 )
 def test_ineligible_entities_are_ignored(overrides: dict[str, Any]) -> None:
     data = {"area_id": "room", "auto_discover_sensors": True}
-    assert resolve(data, entity("lock.ignored", **overrides)) == data
+    entity_id = (
+        "sensor.temp_ignored"
+        if overrides.get("platform") == "weather"
+        else "lock.ignored"
+    )
+    assert resolve(data, entity(entity_id, **overrides)) == data
 
 
-def test_exclusions_manual_precedence_and_no_mutation() -> None:
+def test_weather_keyword_entities_are_ignored() -> None:
+    data = {"area_id": "room", "auto_discover_sensors": True}
+    assert (
+        resolve(
+            data,
+            entity("sensor.weather_temperature", original_device_class="temperature"),
+            entity("sensor.forecast_humidity", original_device_class="humidity"),
+        )
+        == data
+    )
+
+
+def test_exclusions_strip_saved_and_discovered_without_mutation() -> None:
     data = {
         "area_id": "room",
         "auto_discover_sensors": True,
-        "excluded_sensors": ["lock.excluded", "lock.manual"],
-        "lock_sensors": ["lock.manual"],
+        "excluded_sensors": ["lock.excluded", "lock.saved_excluded"],
+        "lock_sensors": ["lock.saved_excluded", "lock.manual"],
         "custom_binary_sensors": ["lock.custom"],
     }
     original = deepcopy(data)
     result = resolve(
         data,
-        *(entity(f"lock.{name}") for name in ["excluded", "manual", "custom", "new"]),
+        *(
+            entity(f"lock.{name}")
+            for name in ["excluded", "saved_excluded", "manual", "custom", "new"]
+        ),
     )
     assert result["lock_sensors"] == ["lock.manual", "lock.new"]
     assert result["custom_binary_sensors"] == ["lock.custom"]
     assert data == original
+
+
+def test_exclusions_apply_even_when_discovery_disabled() -> None:
+    data = {
+        "area_id": "room",
+        "auto_discover_sensors": False,
+        "excluded_sensors": ["binary_sensor.blocked"],
+        "motion_sensors": ["binary_sensor.blocked", "binary_sensor.kept"],
+    }
+    result = resolve(data, entity("binary_sensor.new", device_class="motion"))
+    assert result["motion_sensors"] == ["binary_sensor.kept"]
 
 
 def test_ambiguous_types_are_not_guessed() -> None:
@@ -199,12 +241,17 @@ def test_registry_changes_refresh_and_cleanup() -> None:
     with (
         patch(
             "custom_components.area_occupancy.discovery.iter_area_subentries",
-            return_value=[("id", {"auto_discover_sensors": True})],
+            return_value=[("id", {})],
         ),
         patch("custom_components.area_occupancy.discovery.async_call_later") as later,
     ):
         async_track_discovery(hass, entry, refresh)
         listener = hass.bus.async_listen.call_args_list[0].args[1]
+        assert (
+            hass.bus.async_listen.call_args_list[2].args[0]
+            == EVENT_HOMEASSISTANT_STARTED
+        )
+        started_listener = hass.bus.async_listen.call_args_list[2].args[1]
         listener(SimpleNamespace(data={"action": "update", "changes": {"name": "old"}}))
         later.assert_not_called()
         listener(SimpleNamespace(data={"action": "create"}))
@@ -215,21 +262,25 @@ def test_registry_changes_refresh_and_cleanup() -> None:
         later.return_value.assert_called_once()
         asyncio.run(later.call_args.args[2](None))
         refresh.assert_awaited_once()
+        started_listener(SimpleNamespace(data={}))
+        assert later.call_count == 3
         listener(SimpleNamespace(data={"action": "remove"}))
         entry.async_on_unload.call_args_list[0].args[0]()
-        assert later.return_value.call_count == 2
+        assert later.return_value.call_count == 3
 
 
-def test_registry_changes_do_nothing_for_manual_areas() -> None:
+def test_registry_changes_do_nothing_when_discovery_disabled() -> None:
     hass, entry = Mock(), Mock()
     with (
         patch(
             "custom_components.area_occupancy.discovery.iter_area_subentries",
-            return_value=[("id", {})],
+            return_value=[("id", {"auto_discover_sensors": False})],
         ),
         patch("custom_components.area_occupancy.discovery.async_call_later") as later,
     ):
         async_track_discovery(hass, entry, AsyncMock())
         listener = hass.bus.async_listen.call_args_list[0].args[1]
+        started_listener = hass.bus.async_listen.call_args_list[2].args[1]
         listener(SimpleNamespace(data={"action": "create"}))
+        started_listener(SimpleNamespace(data={}))
         later.assert_not_called()
