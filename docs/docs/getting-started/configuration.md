@@ -22,6 +22,14 @@ Area configuration uses a multi-step wizard that walks you through setup one sec
 
 Select the Home Assistant area and its primary [Purpose](../features/purpose.md). The purpose sets a sensible default for the [decay](../features/decay.md) half-life used when probability decreases.
 
+**Automatically discover sensors** is enabled for new areas. It adds supported sensors using their Home Assistant device class and area assignment. An entity's area takes precedence over its device's area. Discovery refreshes at startup, when configuration is saved, and after entity or device registry changes.
+
+Existing areas keep their manual selections and discovery stays off until you enable it in **Area Basics**. Turning discovery off removes automatic additions without changing your saved manual selections or learned history.
+
+Use **Exclude from automatic discovery** to leave specific entities out. Manual selections take precedence: if you selected an excluded entity yourself, also remove it from its sensor group to stop using it. Manual selections can supplement discovery, including devices assigned to another area.
+
+Discovery supports motion/occupancy/presence, typed door and window contacts, media players, locks, covers, power, and supported environmental device classes. Disabled, hidden, diagnostic/configuration entities and this integration's own outputs are skipped. Generic opening contacts, switches/appliances, Wi-Fi counts, sleep sensors, and custom sensors still require manual selection because their role cannot be inferred reliably. At least one discovered or manually selected motion/presence sensor is required to save an area.
+
 You can also select **Adjacent Areas** — other configured areas that physically connect to this one (a hallway and the bedroom it leads to, for example). The selection is symmetric: adding an area here also adds this one to its neighbour's list. Adjacency has no fixed strength setting; the integration learns how your household actually moves between the rooms and uses that to influence probability and decay. See [Adjacent Areas](../features/adjacent-areas.md) for details and what to expect during the learning period.
 
 The following purposes are available (in order of decay time, shortest to longest):
@@ -58,7 +66,7 @@ Person tracking never does either of these, only the away mode entity. Don't dri
 
 ### Step 2: Motion Sensors
 
-Configure motion and presence sensors for the area. At least one motion sensor is required. You can also adjust:
+Configure motion and presence sensors for the area. At least one motion sensor is required, either discovered automatically or selected here. The sensor pickers store manual additions; automatic sensors do not need to be selected again. You can also adjust:
 
 - **Motion Weight**: How much influence motion sensors have on the calculation
 - **Motion Timeout**: Additional timeout applied to historical motion data (configured using a duration picker)

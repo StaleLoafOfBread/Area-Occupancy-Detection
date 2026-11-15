@@ -88,6 +88,8 @@ CONF_PURPOSE: Final = "purpose"
 CONF_ADJACENT_AREAS: Final = (
     "adjacent_areas"  # JSON list of adjacent area_ids; consumed by AreaRelationships
 )
+CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
+CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
 CONF_MOTION_SENSORS: Final = "motion_sensors"
 CONF_MOTION_PROB_GIVEN_TRUE: Final = "motion_prob_given_true"
 CONF_MOTION_PROB_GIVEN_FALSE: Final = "motion_prob_given_false"

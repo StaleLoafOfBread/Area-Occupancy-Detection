@@ -38,6 +38,7 @@ from .const import (
 from .data.forecast import build_aggregate_time_priors, build_area_time_priors
 from .data.prior import DEFAULT_SLOT_MINUTES, PRIOR_FACTOR
 from .data.purpose import get_default_decay_half_life
+from .discovery import resolve_area_sensors
 from .utils import get_coordinator
 
 if TYPE_CHECKING:
@@ -572,7 +573,7 @@ async def _set_area_option(hass: HomeAssistant, call: ServiceCall) -> dict[str, 
         candidate, candidate.get(CONF_PURPOSE, DEFAULT_PURPOSE)
     )
 
-    if errors := validate_area_config(candidate):
+    if errors := validate_area_config(resolve_area_sensors(hass, candidate)):
         raise ServiceValidationError(
             f"Invalid configuration for area '{area_name}': "
             + ", ".join(f"{field}={reason}" for field, reason in sorted(errors.items()))

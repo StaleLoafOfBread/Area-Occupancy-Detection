@@ -75,6 +75,7 @@ from .db.schema import (
     OccupiedIntervalsCache,
     Priors,
 )
+from .discovery import async_track_discovery
 from .migrations import async_migrate_entry
 from .service import async_setup_services, async_unload_services
 
@@ -209,6 +210,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if "_services_setup" not in hass.data:
             hass.data["_services_setup"] = {}
         hass.data["_services_setup"][DOMAIN] = True
+
+    async def refresh_discovered_inputs() -> None:
+        await _async_entry_updated(hass, entry)
+
+    async_track_discovery(hass, entry, refresh_discovered_inputs)
 
     # Add update listener
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))

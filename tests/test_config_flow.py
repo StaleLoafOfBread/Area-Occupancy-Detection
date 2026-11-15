@@ -49,6 +49,7 @@ from custom_components.area_occupancy.const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
     CONF_CUSTOM_BINARY_ACTIVE_STATES,
     CONF_CUSTOM_BINARY_SENSORS,
@@ -60,6 +61,7 @@ from custom_components.area_occupancy.const import (
     CONF_DOOR_ACTIVE_STATE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
+    CONF_EXCLUDED_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
     CONF_LOCK_ACTIVE_STATE,
     CONF_LOCK_SENSORS,
@@ -2466,12 +2468,18 @@ class TestSectionEditing:
         assert schema({}) == {
             CONF_PURPOSE: "sleeping",
             CONF_ADJACENT_AREAS: ["kitchen"],
+            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_EXCLUDED_SENSORS: [],
         }
 
     def test_basics_defaults_stay_generic_when_adding(self) -> None:
         schema = vol.Schema(_create_basics_step_schema(is_editing=True))
 
-        assert schema({}) == {CONF_PURPOSE: DEFAULT_PURPOSE}
+        assert schema({}) == {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_EXCLUDED_SENSORS: [],
+        }
 
     async def test_edit_basics_spoke_changes_purpose_and_keeps_rest(
         self, config_flow_options_flow
@@ -3018,3 +3026,41 @@ class TestAlreadyConfigured:
             )["config"]["abort"]["already_configured"]
             assert "{" not in text
             assert "Add an area" in text
+
+
+@pytest.mark.parametrize(
+    ("is_editing", "current", "expected"),
+    [
+        (False, None, True),
+        (True, {}, False),
+        (True, {CONF_AUTO_DISCOVER_SENSORS: True}, True),
+        (True, {CONF_AUTO_DISCOVER_SENSORS: False}, False),
+    ],
+)
+def test_discovery_basics_defaults(
+    is_editing: bool, current: dict[str, Any] | None, expected: bool
+) -> None:
+    schema = vol.Schema(
+        _create_basics_step_schema(is_editing=is_editing, current=current)
+    )
+    submitted = {} if is_editing else {CONF_AREA_ID: "room"}
+    assert schema(submitted)[CONF_AUTO_DISCOVER_SENSORS] is expected
+
+
+async def test_automatic_motion_satisfies_wizard(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {CONF_AREA_ID: "room", CONF_AUTO_DISCOVER_SENSORS: True}
+    with (
+        patch(
+            "custom_components.area_occupancy.config_flow.resolve_area_sensors",
+            return_value={CONF_MOTION_SENSORS: ["binary_sensor.discovered"]},
+        ),
+        patch.object(
+            flow, "async_step_area_sensors", new_callable=AsyncMock
+        ) as next_step,
+    ):
+        await flow.async_step_area_motion({CONF_MOTION_SENSORS: []})
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == []

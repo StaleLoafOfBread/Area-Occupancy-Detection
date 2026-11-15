@@ -92,6 +92,7 @@ from .const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
     CONF_CLOSED_DOOR_HOLD,
     CONF_CO2_SENSORS,
@@ -108,6 +109,7 @@ from .const import (
     CONF_DOOR_ACTIVE_STATE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
+    CONF_EXCLUDED_SENSORS,
     CONF_HEALTH_ENABLED,
     CONF_HUMIDITY_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
@@ -207,6 +209,7 @@ from .const import (
     get_state_options,
 )
 from .data.purpose import AreaPurpose, Purpose, get_purpose_options
+from .discovery import resolve_area_sensors
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1163,6 +1166,18 @@ def _create_basics_step_schema(
             mode=SelectSelectorMode.DROPDOWN,
         )
     )
+    fields[
+        vol.Optional(
+            CONF_AUTO_DISCOVER_SENSORS,
+            default=current.get(CONF_AUTO_DISCOVER_SENSORS, not is_editing),
+        )
+    ] = BooleanSelector()
+    fields[
+        vol.Optional(
+            CONF_EXCLUDED_SENSORS,
+            default=current.get(CONF_EXCLUDED_SENSORS, []),
+        )
+    ] = EntitySelector(EntitySelectorConfig(multiple=True))
     if adjacent_options:
         adjacent_default = list(current.get(CONF_ADJACENT_AREAS) or [])
         fields[vol.Optional(CONF_ADJACENT_AREAS, default=adjacent_default)] = (
@@ -1623,6 +1638,9 @@ def _build_area_description_placeholders(
         Dictionary of placeholders for form/menu descriptions
     """
 
+    if hass:
+        area_config = resolve_area_sensors(hass, area_config)
+
     def _name(some_area_id: str) -> str:
         if hass:
             with contextlib.suppress(ValueError):
@@ -1905,7 +1923,9 @@ class BaseOccupancyFlow:
             Mapping of field key (or ``"base"``) to ``strings.json`` error key.
             Empty when validation passed.
         """
-        errors = validate_area_config(data)
+        errors = validate_area_config(
+            resolve_area_sensors(hass, data) if hass else data
+        )
         area_id = data.get(CONF_AREA_ID, "")
         if area_id and hass and CONF_AREA_ID not in errors:
             try:
@@ -2262,7 +2282,13 @@ class BaseOccupancyFlow:
             if user_input is not None
             else _draft_to_suggested(
                 self._area_config_draft,
-                {CONF_AREA_ID, CONF_PURPOSE, CONF_ADJACENT_AREAS},
+                {
+                    CONF_AREA_ID,
+                    CONF_PURPOSE,
+                    CONF_ADJACENT_AREAS,
+                    CONF_AUTO_DISCOVER_SENSORS,
+                    CONF_EXCLUDED_SENSORS,
+                },
             )
         )
         if suggested:
@@ -2298,7 +2324,10 @@ class BaseOccupancyFlow:
         if user_input is not None:
             flattened = flatten_sectioned_input(user_input)
 
-            if not flattened.get(CONF_MOTION_SENSORS):
+            effective = resolve_area_sensors(
+                self.hass, {**self._area_config_draft, **flattened}
+            )
+            if not effective.get(CONF_MOTION_SENSORS):
                 errors["base"] = "motion_required"
 
             prob_true = flattened.get(

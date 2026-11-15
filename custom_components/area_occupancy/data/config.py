@@ -130,6 +130,7 @@ from ..const import (
     DEFAULT_WINDOW_ACTIVE_STATE,
     HA_RECORDER_DAYS,
 )
+from ..discovery import resolve_area_sensors
 from .purpose import get_default_decay_half_life
 
 if TYPE_CHECKING:
@@ -525,6 +526,8 @@ class AreaConfig:
             data: Dictionary containing merged config entry data and options
 
         """
+        data = resolve_area_sensors(self.hass, data)
+
         # Validate threshold range
         threshold = float(data.get(CONF_THRESHOLD, DEFAULT_THRESHOLD)) / 100.0
 
