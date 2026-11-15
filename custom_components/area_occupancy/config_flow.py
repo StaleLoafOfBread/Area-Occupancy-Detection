@@ -2833,9 +2833,16 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
             menu_options.append("manage_areas")
             menu_options.append("finish_setup")
 
+        area_names = ", ".join(
+            self._area_title(area.get(CONF_AREA_ID, "")) for area in self._areas
+        )
         return self.async_show_menu(
             step_id="user",
             menu_options=menu_options,
+            description_placeholders={
+                "area_count": str(len(self._areas)),
+                "area_names": area_names or "none",
+            },
         )
 
     async def async_step_manage_areas(

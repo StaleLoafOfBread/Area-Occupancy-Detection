@@ -13,7 +13,7 @@
         "step": {
             "user": {
                 "title": "Area Occupancy Detection",
-                "description": "Select an area to manage or choose an action. At least one area must be configured before finishing setup.",
+                "description": "Ready to set up {area_count} area(s): {area_names}. Choose **Finish Setup** to create them, **Manage Areas** to edit or remove any area, or **Add New Area** to add another room.",
                 "menu_options": {
                     "add_area": "Add New Area",
                     "manage_areas": "Manage Areas",

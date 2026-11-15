@@ -3204,6 +3204,10 @@ async def test_user_step_prepopulates_eligible_areas_and_finishes_setup(
     result = await flow.async_step_user()
     assert result["type"] == FlowResultType.MENU
     assert result["step_id"] == "user"
+    assert result["description_placeholders"] == {
+        "area_count": "2",
+        "area_names": "Kitchen, Master Bedroom",
+    }
 
     by_area = {area[CONF_AREA_ID]: area for area in flow._areas}
     assert set(by_area) == {kitchen_id, bedroom_id}
