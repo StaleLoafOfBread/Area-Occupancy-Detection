@@ -17,6 +17,7 @@ import voluptuous as vol
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
+    SOURCE_IGNORE,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -212,7 +213,11 @@ from .const import (
 from .data.purpose import AreaPurpose, Purpose, get_purpose_options
 from .discovery import (
     ALL_AREA_SENSOR_KEYS,
+    area_discovery_unique_id,
+    async_trigger_area_discoveries,
+    build_suggested_area_config,
     discover_area_sensors,
+    discover_eligible_areas,
     is_weather_entity,
     resolve_area_sensors,
 )
@@ -2060,6 +2065,16 @@ class BaseOccupancyFlow:
             areas = self._get_wizard_areas()
             area = find_area_by_id(areas, self._area_being_edited)
             self._area_config_draft = area.copy() if area else {}
+        elif getattr(self, "hass", None):
+            configured_ids = {
+                str(a.get(CONF_AREA_ID))
+                for a in self._get_wizard_areas()
+                if a.get(CONF_AREA_ID)
+            }
+            eligible = discover_eligible_areas(
+                self.hass, excluded_area_ids=configured_ids
+            )
+            self._area_config_draft = eligible[0] if eligible else {}
         else:
             self._area_config_draft = {}
 
@@ -2752,6 +2767,15 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         self._area_config_draft: dict[str, Any] = {}
         self._area_edit_section: str | None = None
         self._sensor_group_being_edited: str | None = None
+        self._initial_areas_populated: bool = False
+        self._discovered_area_id: str | None = None
+
+    def _get_active_entry(self) -> ConfigEntry | None:
+        """Return the active config entry for this domain, if one exists."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.source != SOURCE_IGNORE:
+                return entry
+        return None
 
     def _get_wizard_areas(self) -> list[dict[str, Any]]:
         """Get areas list for duplicate checking."""
@@ -2783,14 +2807,18 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         # Check if a config entry already exists (e.g., user clicked "Add device" button)
         # In single-instance architecture, only one config entry should exist;
         # areas are added as subentries with the entry's "Add an area" button.
-        existing_entries = [
-            entry
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            if entry.source != "ignore"
-        ]
-        if existing_entries and user_input is None:
+        if self._get_active_entry() and user_input is None:
             # Config entry already exists - point to "Add an area" (#582)
             return self.async_abort(reason="already_configured")
+
+        if (
+            not self._initial_areas_populated
+            and not self._areas
+            and user_input is None
+            and self.hass
+        ):
+            self._initial_areas_populated = True
+            self._areas = discover_eligible_areas(self.hass)
 
         # If no areas exist yet, automatically start configuring the first area
         # This provides a smoother user experience - users don't need to click "Add New Area" first
@@ -2879,6 +2907,8 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
                         },
                     ) from err
                 raise
+
+            async_trigger_area_discoveries(self.hass)
 
             # Each area becomes a config subentry so the integration page
             # lists them natively with their own reconfigure and delete.
@@ -2999,6 +3029,116 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         """Cancel area removal."""
         self._area_to_remove = None
         return await self.async_step_user()
+
+    async def async_step_integration_discovery(
+        self, discovery_info: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle discovery of an eligible Home Assistant area."""
+        area_id = str(discovery_info.get(CONF_AREA_ID) or "")
+        if not area_id:
+            return self.async_abort(reason="area_required")
+
+        try:
+            area_name = _resolve_area_id_to_name(self.hass, area_id)
+        except ValueError:
+            return self.async_abort(reason="area_not_found")
+
+        await self.async_set_unique_id(area_discovery_unique_id(area_id))
+        self._abort_if_unique_id_configured()
+
+        active_entry = self._get_active_entry()
+        if active_entry and find_area_subentry_id(active_entry, area_id) is not None:
+            return self.async_abort(reason="area_already_configured")
+
+        discovered = discover_area_sensors(self.hass, area_id)
+        if not discovered.get(CONF_MOTION_SENSORS):
+            return self.async_abort(reason="motion_required")
+
+        self.context["title_placeholders"] = {"name": area_name}
+        self._discovered_area_id = area_id
+        return await self.async_step_discovery_confirm()
+
+    async def async_step_discovery_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm adding a discovered area to Area Occupancy Detection."""
+        area_id = self._discovered_area_id or ""
+        if not area_id:
+            return self.async_abort(reason="area_required")
+
+        try:
+            area_name = _resolve_area_id_to_name(self.hass, area_id)
+        except ValueError:
+            return self.async_abort(reason="area_not_found")
+
+        active_entry = self._get_active_entry()
+        if active_entry and find_area_subentry_id(active_entry, area_id) is not None:
+            return self.async_abort(reason="area_already_configured")
+
+        discovered = discover_area_sensors(self.hass, area_id)
+        suggested_config = build_suggested_area_config(self.hass, area_id, area_name)
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            candidate = {
+                **suggested_config,
+                **user_input,
+                CONF_AREA_ID: area_id,
+            }
+            apply_purpose_based_decay_default(candidate, candidate.get(CONF_PURPOSE))
+            errors.update(self._validate_config(candidate, self.hass))
+
+            if not errors:
+                if active_entry is not None:
+                    self.hass.config_entries.async_add_subentry(
+                        active_entry,
+                        ConfigSubentry(
+                            data=MappingProxyType(candidate),
+                            subentry_type=SUBENTRY_TYPE_AREA,
+                            title=area_name,
+                            unique_id=str(area_id),
+                        ),
+                    )
+                    async_trigger_area_discoveries(self.hass)
+                    return self.async_abort(
+                        reason="area_added",
+                        description_placeholders={"area_name": area_name},
+                    )
+
+                await self.async_set_unique_id(DOMAIN, raise_on_progress=False)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title="Area Occupancy Detection",
+                    data={},
+                    subentries=[
+                        ConfigSubentryData(
+                            data=candidate,
+                            subentry_type=SUBENTRY_TYPE_AREA,
+                            title=area_name,
+                            unique_id=str(area_id),
+                        )
+                    ],
+                )
+
+        base_schema = vol.Schema(
+            _create_basics_step_schema(is_editing=True, current=suggested_config)
+        )
+        data_schema = (
+            self.add_suggested_values_to_schema(base_schema, user_input)
+            if user_input is not None
+            else base_schema
+        )
+
+        return self.async_show_form(
+            step_id="discovery_confirm",
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders={
+                "area_name": area_name,
+                "motion_count": str(len(discovered.get(CONF_MOTION_SENSORS, []))),
+                "sensor_count": str(sum(len(v) for v in discovered.values())),
+            },
+        )
 
     @staticmethod
     @callback

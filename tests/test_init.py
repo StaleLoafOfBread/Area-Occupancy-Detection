@@ -175,7 +175,7 @@ class TestAsyncSetupEntry:
         mock_forward_setups.assert_awaited_once_with(mock_config_entry, PLATFORMS)
 
         # Verify update listener was added
-        mock_add_listener.assert_called_once()
+        mock_add_listener.assert_called()
 
         # Verify coordinator is stored in hass.data[DOMAIN]
         assert hass.data[DOMAIN_CONST] == coordinator

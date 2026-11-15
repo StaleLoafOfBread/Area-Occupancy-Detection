@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
 from custom_components.area_occupancy.config_flow import (
@@ -90,11 +91,17 @@ from custom_components.area_occupancy.const import (
     DOMAIN,
     SUBENTRY_TYPE_AREA,
 )
+from custom_components.area_occupancy.data.purpose import infer_purpose_from_name
 from custom_components.area_occupancy.preview import PREVIEW_COMPONENT, PREVIEW_DATA_KEY
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import (
+    SOURCE_INTEGRATION_DISCOVERY,
+    ConfigEntry,
+    ConfigSubentry,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar, entity_registry as er
 from tests.conftest import create_area_config
 
 
@@ -3155,3 +3162,311 @@ async def test_sensors_step_prepopulates_discovered_and_excludes_removed(
     next_step.assert_awaited_once()
     assert flow._area_config_draft[CONF_EXCLUDED_SENSORS] == ["sensor.temp_ignore"]
     assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == []
+
+
+def _register_area_with_motion(
+    hass: HomeAssistant, name: str, motion_entity_id: str | None = None
+) -> str:
+    """Create an area in the HA registry and optionally assign a motion sensor."""
+    area_reg = ar.async_get(hass)
+    area = area_reg.async_create(name)
+    if motion_entity_id is not None:
+        ent_reg = er.async_get(hass)
+        object_id = motion_entity_id.split(".", 1)[1]
+        entry = ent_reg.async_get_or_create(
+            "binary_sensor",
+            "test",
+            object_id,
+            suggested_object_id=object_id,
+            original_device_class="motion",
+        )
+        ent_reg.async_update_entity(entry.entity_id, area_id=area.id)
+    return area.id
+
+
+async def test_user_step_prepopulates_eligible_areas_and_finishes_setup(
+    hass: HomeAssistant,
+) -> None:
+    """Initial user setup pre-populates all eligible areas with inferred purposes."""
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    bedroom_id = _register_area_with_motion(
+        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
+    )
+    _register_area_with_motion(hass, "Hall Closet", None)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    result = await flow.async_step_user()
+    assert result["type"] == FlowResultType.MENU
+    assert result["step_id"] == "user"
+
+    by_area = {area[CONF_AREA_ID]: area for area in flow._areas}
+    assert set(by_area) == {kitchen_id, bedroom_id}
+    assert by_area[kitchen_id][CONF_PURPOSE] == infer_purpose_from_name("Kitchen")
+    assert by_area[bedroom_id][CONF_PURPOSE] == infer_purpose_from_name(
+        "Master Bedroom"
+    )
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.async_trigger_area_discoveries",
+    ) as mock_trigger:
+        finish = await flow.async_step_finish_setup()
+
+    assert finish["type"] == FlowResultType.CREATE_ENTRY
+    subentries = finish["subentries"]
+    assert len(subentries) == 2
+    assert {sub["data"][CONF_AREA_ID] for sub in subentries} == {
+        kitchen_id,
+        bedroom_id,
+    }
+    assert all(sub["subentry_type"] == SUBENTRY_TYPE_AREA for sub in subentries)
+    mock_trigger.assert_called_once_with(hass)
+
+
+async def test_init_area_wizard_suggests_next_eligible_area(
+    hass: HomeAssistant,
+) -> None:
+    """Adding an area pre-populates the next unconfigured eligible area."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    bedroom_id = _register_area_with_motion(
+        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
+    )
+
+    config_flow = AreaOccupancyConfigFlow()
+    config_flow.hass = hass
+    config_flow.context = {"source": "user"}
+    config_flow._areas = [{CONF_AREA_ID: kitchen_id}]
+    config_flow._init_area_wizard()
+    assert config_flow._area_config_draft[CONF_AREA_ID] == bedroom_id
+    assert config_flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name(
+        "Master Bedroom"
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=kitchen_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Kitchen",
+                "unique_id": kitchen_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    options_flow = AreaOccupancyOptionsFlow()
+    options_flow.hass = hass
+    options_flow.handler = entry.entry_id
+    options_flow._init_area_wizard()
+    assert options_flow._area_config_draft[CONF_AREA_ID] == bedroom_id
+    assert options_flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name(
+        "Master Bedroom"
+    )
+
+
+async def test_integration_discovery_creates_entry_when_none_exists(
+    hass: HomeAssistant,
+) -> None:
+    """Confirming area discovery creates the config entry with one subentry."""
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+
+    step = await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+    assert step["type"] == FlowResultType.FORM
+    assert step["step_id"] == "discovery_confirm"
+
+    result = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert len(result["subentries"]) == 1
+    assert result["subentries"][0]["data"][CONF_AREA_ID] == kitchen_id
+    assert result["subentries"][0]["subentry_type"] == SUBENTRY_TYPE_AREA
+
+
+async def test_integration_discovery_adds_subentry_to_active_entry(
+    hass: HomeAssistant,
+) -> None:
+    """Confirming area discovery adds a subentry to the active entry and aborts."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    living_id = _register_area_with_motion(
+        hass, "Living Room", "binary_sensor.living_motion"
+    )
+    bedroom_id = _register_area_with_motion(
+        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=living_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Living Room",
+                "unique_id": living_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+
+    step = await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: bedroom_id, "area_name": "Master Bedroom"}
+    )
+    assert step["type"] == FlowResultType.FORM
+    assert step["step_id"] == "discovery_confirm"
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_add_subentry",
+            wraps=hass.config_entries.async_add_subentry,
+        ) as mock_add_subentry,
+        patch(
+            "custom_components.area_occupancy.config_flow.async_trigger_area_discoveries",
+        ) as mock_trigger,
+    ):
+        result = await flow.async_step_discovery_confirm(
+            {
+                CONF_PURPOSE: infer_purpose_from_name("Master Bedroom"),
+                CONF_AUTO_DISCOVER_SENSORS: True,
+                CONF_EXCLUDED_SENSORS: [],
+            }
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "area_added"
+    mock_add_subentry.assert_called_once()
+    added_entry, added_subentry = mock_add_subentry.call_args.args
+    assert added_entry is entry
+    assert isinstance(added_subentry, ConfigSubentry)
+    assert added_subentry.subentry_type == SUBENTRY_TYPE_AREA
+    assert added_subentry.data[CONF_AREA_ID] == bedroom_id
+    assert added_subentry.subentry_id in entry.subentries
+    mock_trigger.assert_called_once_with(hass)
+
+
+async def test_discovery_confirm_validates_motion_required(
+    hass: HomeAssistant,
+) -> None:
+    """Excluding all motion sensors or disabling auto-discovery shows error."""
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+    await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+
+    disabled_res = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert disabled_res["type"] == FlowResultType.FORM
+    assert disabled_res["step_id"] == "discovery_confirm"
+    assert disabled_res["errors"] == {"base": "motion_required"}
+
+    excluded_res = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: ["binary_sensor.kitchen_motion"],
+        }
+    )
+    assert excluded_res["type"] == FlowResultType.FORM
+    assert excluded_res["step_id"] == "discovery_confirm"
+    assert excluded_res["errors"] == {"base": "motion_required"}
+
+
+async def test_integration_discovery_abort_reasons(hass: HomeAssistant) -> None:
+    """Discovery entry step aborts when area info is missing, invalid, or configured."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    empty_area_id = _register_area_with_motion(hass, "Closet", None)
+
+    def _new_flow() -> AreaOccupancyConfigFlow:
+        flow = AreaOccupancyConfigFlow()
+        flow.hass = hass
+        flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+        return flow
+
+    missing_res = await _new_flow().async_step_integration_discovery({})
+    assert missing_res["type"] == FlowResultType.ABORT
+    assert missing_res["reason"] == "area_required"
+
+    not_found_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: "nonexistent_area"}
+    )
+    assert not_found_res["type"] == FlowResultType.ABORT
+    assert not_found_res["reason"] == "area_not_found"
+
+    no_motion_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: empty_area_id}
+    )
+    assert no_motion_res["type"] == FlowResultType.ABORT
+    assert no_motion_res["reason"] == "motion_required"
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=kitchen_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Kitchen",
+                "unique_id": kitchen_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    configured_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id}
+    )
+    assert configured_res["type"] == FlowResultType.ABORT
+    assert configured_res["reason"] == "area_already_configured"

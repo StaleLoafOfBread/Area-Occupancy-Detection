@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker as create_sessionmaker
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import (
@@ -75,7 +75,7 @@ from .db.schema import (
     OccupiedIntervalsCache,
     Priors,
 )
-from .discovery import async_track_discovery
+from .discovery import async_track_discovery, async_trigger_area_discoveries
 from .migrations import async_migrate_entry
 from .service import async_setup_services, async_unload_services
 
@@ -215,6 +215,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_entry_updated(hass, entry)
 
     async_track_discovery(hass, entry, refresh_discovered_inputs)
+    async_trigger_area_discoveries(hass)
 
     # Add update listener
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
@@ -476,7 +477,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         other_entries = [
             e
             for e in hass.config_entries.async_entries(DOMAIN)
-            if e.entry_id != entry.entry_id
+            if e.entry_id != entry.entry_id and e.source != SOURCE_IGNORE
         ]
 
         if db_path is not None and db_path.exists() and area_names:
@@ -650,7 +651,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         other_entries = [
             e
             for e in hass.config_entries.async_entries(DOMAIN)
-            if e.entry_id != entry.entry_id
+            if e.entry_id != entry.entry_id and e.source != SOURCE_IGNORE
         ]
 
         if not other_entries:
@@ -805,3 +806,4 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 _LOGGER.exception("Failed to save updated area entities to database")
         await coordinator.async_request_refresh()
         _async_sync_wasp_deprecation_issue(hass, coordinator)
+    async_trigger_area_discoveries(hass)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
+import re
+from typing import Final
 
 from ..const import DEFAULT_PURPOSE
 
@@ -261,3 +263,119 @@ def get_default_decay_half_life(purpose: str | None = None) -> float:
             pass
     # Fallback to default purpose half-life
     return PURPOSE_DEFINITIONS[AreaPurpose(DEFAULT_PURPOSE)].half_life
+
+
+PURPOSE_NAME_KEYWORDS: Final[tuple[tuple[AreaPurpose, tuple[str, ...]], ...]] = (
+    (
+        AreaPurpose.BATHROOM,
+        (
+            "bathroom",
+            "bath",
+            "ensuite",
+            "en-suite",
+            "en suite",
+            "powder",
+            "restroom",
+            "toilet",
+            "wc",
+            "lavatory",
+            "shower",
+        ),
+    ),
+    (
+        AreaPurpose.SLEEPING,
+        ("bedroom", "bed", "nursery", "guest room", "master", "bunk", "sleeping"),
+    ),
+    (AreaPurpose.FOOD_PREP, ("kitchen", "kitchenette", "cooking", "scullery")),
+    (AreaPurpose.EATING, ("dining", "breakfast", "dinette", "eating")),
+    (AreaPurpose.WORKING, ("office", "study", "desk", "work", "library", "studio")),
+    (AreaPurpose.GARAGE, ("garage", "workshop", "carport", "shed")),
+    (AreaPurpose.DRIVEWAY, ("driveway", "parking")),
+    (
+        AreaPurpose.GARDEN,
+        (
+            "garden",
+            "yard",
+            "backyard",
+            "front yard",
+            "patio",
+            "deck",
+            "porch",
+            "balcony",
+            "terrace",
+            "lawn",
+        ),
+    ),
+    (
+        AreaPurpose.UTILITY,
+        (
+            "utility",
+            "laundry",
+            "pantry",
+            "mudroom",
+            "mud room",
+            "boot room",
+            "closet",
+            "wardrobe",
+            "storage",
+            "basement",
+            "cellar",
+            "attic",
+            "boiler",
+            "server",
+        ),
+    ),
+    (
+        AreaPurpose.PASSAGEWAY,
+        (
+            "hallway",
+            "hall",
+            "corridor",
+            "passage",
+            "foyer",
+            "entry",
+            "entryway",
+            "vestibule",
+            "landing",
+            "stair",
+            "stairs",
+            "staircase",
+            "lobby",
+        ),
+    ),
+    (
+        AreaPurpose.RELAXING,
+        ("media", "theater", "theatre", "cinema", "den", "snug", "reading", "lounge"),
+    ),
+    (
+        AreaPurpose.SOCIAL,
+        (
+            "living",
+            "family",
+            "sitting",
+            "playroom",
+            "play room",
+            "game",
+            "rec room",
+            "great room",
+            "sunroom",
+            "conservatory",
+        ),
+    ),
+)
+
+
+def infer_purpose_from_name(area_name: str | None) -> str:
+    """Infer an AreaPurpose value from a Home Assistant area name."""
+    if not area_name:
+        return DEFAULT_PURPOSE
+    normalized = area_name.lower()
+    for purpose, keywords in PURPOSE_NAME_KEYWORDS:
+        if any(
+            re.search(rf"\b{re.escape(keyword)}\b", normalized) for keyword in keywords
+        ):
+            return purpose.value
+    for purpose, keywords in PURPOSE_NAME_KEYWORDS:
+        if any(keyword in normalized for keyword in keywords):
+            return purpose.value
+    return DEFAULT_PURPOSE

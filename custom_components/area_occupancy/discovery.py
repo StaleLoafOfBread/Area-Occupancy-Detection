@@ -6,10 +6,19 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, Final
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import (
+    SOURCE_IGNORE,
+    SOURCE_INTEGRATION_DISCOVERY,
+    ConfigEntry,
+)
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    discovery_flow,
+    entity_registry as er,
+)
 from homeassistant.helpers.event import async_call_later
 
 from .config_helpers import iter_area_subentries
@@ -23,6 +32,7 @@ from .const import (
     CONF_COVER_SENSORS,
     CONF_CUSTOM_BINARY_SENSORS,
     CONF_CUSTOM_NUMERIC_SENSORS,
+    CONF_DECAY_HALF_LIFE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDED_SENSORS,
     CONF_HUMIDITY_SENSORS,
@@ -34,16 +44,20 @@ from .const import (
     CONF_PM25_SENSORS,
     CONF_POWER_SENSORS,
     CONF_PRESSURE_SENSORS,
+    CONF_PURPOSE,
     CONF_SOUND_PRESSURE_SENSORS,
     CONF_TEMPERATURE_SENSORS,
     CONF_VOC_SENSORS,
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_SENSORS,
     DEFAULT_AUTO_DISCOVER_SENSORS,
+    DEFAULT_DECAY_HALF_LIFE,
+    DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
     WEATHER_KEYWORDS,
     WEATHER_PLATFORMS,
 )
+from .data.purpose import infer_purpose_from_name
 
 # Only unambiguous classes are automatic. Generic opening contacts, switches,
 # appliances, sleep sensors, and Wi-Fi counts still need a user's interpretation.
@@ -191,6 +205,113 @@ def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     return resolved
 
 
+def area_discovery_unique_id(area_id: str) -> str:
+    """Return the unique ID used by discovery flows for an HA area."""
+    return f"{DISCOVERY_UNIQUE_ID_PREFIX}{area_id}"
+
+
+def build_suggested_area_config(
+    hass: HomeAssistant, area_id: str, area_name: str | None = None
+) -> dict[str, Any]:
+    """Build a suggested initial configuration dict for a Home Assistant area."""
+    if area_name is None:
+        area_entry = ar.async_get(hass).async_get_area(area_id)
+        area_name = area_entry.name if area_entry else area_id
+
+    return {
+        CONF_AREA_ID: area_id,
+        CONF_PURPOSE: infer_purpose_from_name(area_name),
+        CONF_AUTO_DISCOVER_SENSORS: DEFAULT_AUTO_DISCOVER_SENSORS,
+        CONF_DECAY_HALF_LIFE: DEFAULT_DECAY_HALF_LIFE,
+    }
+
+
+def discover_eligible_areas(
+    hass: HomeAssistant, excluded_area_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Return suggested configs for unconfigured HA areas with motion sensors."""
+    area_reg = ar.async_get(hass)
+    list_areas = getattr(area_reg, "async_list_areas", None)
+    raw_areas = (
+        list_areas()
+        if callable(list_areas)
+        else getattr(area_reg, "areas", {}).values()
+    )
+    areas = sorted(
+        raw_areas,
+        key=lambda area: (
+            getattr(area, "name", None) or getattr(area, "id", "")
+        ).lower(),
+    )
+
+    suggestions: list[dict[str, Any]] = []
+    for area in areas:
+        area_id = getattr(area, "id", None)
+        if not area_id or (excluded_area_ids and area_id in excluded_area_ids):
+            continue
+        discovered = discover_area_sensors(hass, area_id)
+        if discovered.get(CONF_MOTION_SENSORS):
+            suggestions.append(
+                build_suggested_area_config(hass, area_id, getattr(area, "name", None))
+            )
+    return suggestions
+
+
+@callback
+def async_trigger_area_discoveries(hass: HomeAssistant) -> None:
+    """Create discovery flows for eligible unconfigured areas and abort stale ones."""
+    config_entries = getattr(hass, "config_entries", None)
+    if config_entries is None:
+        return
+    entries = config_entries.async_entries(DOMAIN)
+    if not isinstance(entries, list):
+        return
+
+    configured_area_ids: set[str] = set()
+    ignored_unique_ids: set[str] = set()
+    for entry in entries:
+        if getattr(entry, "source", None) == SOURCE_IGNORE:
+            if entry.unique_id:
+                ignored_unique_ids.add(str(entry.unique_id))
+            continue
+        for _, data in iter_area_subentries(entry):
+            if area_id := data.get(CONF_AREA_ID):
+                configured_area_ids.add(str(area_id))
+
+    eligible = discover_eligible_areas(hass, excluded_area_ids=configured_area_ids)
+    eligible_ids = {cfg[CONF_AREA_ID] for cfg in eligible}
+
+    flow_mgr = getattr(config_entries, "flow", None)
+    if flow_mgr is not None and hasattr(flow_mgr, "async_progress_by_handler"):
+        in_progress = flow_mgr.async_progress_by_handler(DOMAIN)
+        if isinstance(in_progress, list):
+            for flow in in_progress:
+                context = flow.get("context", {})
+                if context.get("source") != SOURCE_INTEGRATION_DISCOVERY:
+                    continue
+                uid = str(context.get("unique_id") or "")
+                if uid.startswith(DISCOVERY_UNIQUE_ID_PREFIX):
+                    flow_area_id = uid.removeprefix(DISCOVERY_UNIQUE_ID_PREFIX)
+                    if flow_area_id not in eligible_ids or uid in ignored_unique_ids:
+                        flow_mgr.async_abort(flow["flow_id"])
+
+    if isinstance(getattr(hass, "data", None), dict):
+        for cfg in eligible:
+            area_id = cfg[CONF_AREA_ID]
+            uid = area_discovery_unique_id(area_id)
+            if uid in ignored_unique_ids:
+                continue
+            discovery_flow.async_create_flow(
+                hass,
+                DOMAIN,
+                context={"source": SOURCE_INTEGRATION_DISCOVERY},
+                data={CONF_AREA_ID: area_id},
+                discovery_key=discovery_flow.DiscoveryKey(
+                    domain=DOMAIN, key=area_id, version=1
+                ),
+            )
+
+
 @callback
 def async_track_discovery(
     hass: HomeAssistant,
@@ -204,6 +325,7 @@ def async_track_discovery(
         nonlocal cancel_pending
         cancel_pending = None
         await refresh()
+        async_trigger_area_discoveries(hass)
 
     @callback
     def schedule_refresh() -> None:
@@ -241,6 +363,10 @@ def async_track_discovery(
             schedule_refresh()
 
     @callback
+    def area_registry_changed(_event: Event) -> None:
+        schedule_refresh()
+
+    @callback
     def cancel() -> None:
         if cancel_pending:
             cancel_pending()
@@ -253,4 +379,7 @@ def async_track_discovery(
         entry.async_on_unload(hass.bus.async_listen(event_type, registry_changed))
     entry.async_on_unload(
         hass.bus.async_listen(EVENT_HOMEASSISTANT_STARTED, ha_started)
+    )
+    entry.async_on_unload(
+        hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, area_registry_changed)
     )

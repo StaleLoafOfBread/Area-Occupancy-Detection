@@ -169,6 +169,7 @@ CONF_WEIGHT_WASP: Final = "weight_wasp"
 
 # Default values
 DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
+DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose
 DEFAULT_DECAY_ENABLED: Final = True

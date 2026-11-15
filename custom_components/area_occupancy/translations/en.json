@@ -1,8 +1,14 @@
 {
     "config": {
+        "flow_title": "{name}",
         "abort": {
             "already_configured": "Area Occupancy Detection is already set up, and it holds all your areas in one entry. To add an area, open **Settings → Devices & services → Area Occupancy Detection** and choose **Add an area**. To change an area, use **Reconfigure** on that area; global settings are under **Configure**.",
-            "cannot_remove_last_area": "Cannot remove the last area. At least one area must remain configured."
+            "area_added": "Added {area_name} to Area Occupancy Detection.",
+            "area_already_configured": "That area is already configured.",
+            "area_not_found": "Selected area no longer exists in Home Assistant.",
+            "area_required": "A Home Assistant area is required.",
+            "cannot_remove_last_area": "Cannot remove the last area. At least one area must remain configured.",
+            "motion_required": "At least one motion, occupancy, or presence sensor is required for this area."
         },
         "step": {
             "user": {
@@ -266,8 +272,8 @@
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
-                    "auto_discover_sensors": "Use supported sensors assigned to this Home Assistant area, in addition to your manual selections. Existing areas stay in manual mode until enabled.",
-                    "excluded_sensors": "These entities will not be added automatically. Manually selected entities remain included; remove them from their sensor group to stop using them."
+                    "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             },
             "area_motion": {
@@ -494,6 +500,20 @@
                 "menu_options": {
                     "confirm_remove_area": "Yes, remove area",
                     "cancel_remove_area": "Cancel"
+                }
+            },
+            "discovery_confirm": {
+                "title": "Add discovered area: {area_name}",
+                "description": "Area Occupancy Detection found {motion_count} motion sensor(s) and {sensor_count} total compatible sensor(s) in **{area_name}**. Review the suggested purpose and automatic discovery settings below to add this area.",
+                "data": {
+                    "purpose": "Area Purpose",
+                    "auto_discover_sensors": "Automatically discover sensors",
+                    "excluded_sensors": "Exclude from automatic discovery"
+                },
+                "data_description": {
+                    "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
+                    "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             }
         },
@@ -789,8 +809,8 @@
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
-                    "auto_discover_sensors": "Use supported sensors assigned to this Home Assistant area, in addition to your manual selections. Existing areas stay in manual mode until enabled.",
-                    "excluded_sensors": "These entities will not be added automatically. Manually selected entities remain included; remove them from their sensor group to stop using them."
+                    "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                 }
             },
             "area_motion": {
@@ -1323,8 +1343,8 @@
                         "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                         "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                         "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
-                        "auto_discover_sensors": "Use supported sensors assigned to this Home Assistant area, in addition to your manual selections. Existing areas stay in manual mode until enabled.",
-                        "excluded_sensors": "These entities will not be added automatically. Manually selected entities remain included; remove them from their sensor group to stop using them."
+                        "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
+                        "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected."
                     }
                 },
                 "area_motion": {

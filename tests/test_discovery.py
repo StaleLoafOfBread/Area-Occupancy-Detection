@@ -8,11 +8,29 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from custom_components.area_occupancy.const import (
+    CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_SENSORS,
+    CONF_MOTION_SENSORS,
+    CONF_PURPOSE,
+    DEFAULT_PURPOSE,
+    SUBENTRY_TYPE_AREA,
+)
+from custom_components.area_occupancy.data.purpose import (
+    PURPOSE_DEFINITIONS,
+    infer_purpose_from_name,
+)
 from custom_components.area_occupancy.discovery import (
+    area_discovery_unique_id,
     async_track_discovery,
+    async_trigger_area_discoveries,
+    build_suggested_area_config,
+    discover_eligible_areas,
     resolve_area_sensors,
 )
+from homeassistant.config_entries import SOURCE_IGNORE, SOURCE_INTEGRATION_DISCOVERY
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.helpers import area_registry as ar
 
 
 def entity(entity_id: str, **kwargs: object) -> SimpleNamespace:
@@ -251,7 +269,12 @@ def test_registry_changes_refresh_and_cleanup() -> None:
             hass.bus.async_listen.call_args_list[2].args[0]
             == EVENT_HOMEASSISTANT_STARTED
         )
+        assert (
+            hass.bus.async_listen.call_args_list[3].args[0]
+            == ar.EVENT_AREA_REGISTRY_UPDATED
+        )
         started_listener = hass.bus.async_listen.call_args_list[2].args[1]
+        area_listener = hass.bus.async_listen.call_args_list[3].args[1]
         listener(SimpleNamespace(data={"action": "update", "changes": {"name": "old"}}))
         later.assert_not_called()
         listener(SimpleNamespace(data={"action": "create"}))
@@ -264,9 +287,11 @@ def test_registry_changes_refresh_and_cleanup() -> None:
         refresh.assert_awaited_once()
         started_listener(SimpleNamespace(data={}))
         assert later.call_count == 3
+        area_listener(SimpleNamespace(data={}))
+        assert later.call_count == 4
         listener(SimpleNamespace(data={"action": "remove"}))
         entry.async_on_unload.call_args_list[0].args[0]()
-        assert later.return_value.call_count == 3
+        assert later.return_value.call_count == 4
 
 
 def test_registry_changes_do_nothing_when_discovery_disabled() -> None:
@@ -284,3 +309,172 @@ def test_registry_changes_do_nothing_when_discovery_disabled() -> None:
         listener(SimpleNamespace(data={"action": "create"}))
         started_listener(SimpleNamespace(data={}))
         later.assert_not_called()
+
+
+def test_infer_purpose_from_name() -> None:
+    """Room names infer matching valid purposes and fall back to default."""
+    assert infer_purpose_from_name(None) == DEFAULT_PURPOSE
+    assert infer_purpose_from_name("") == DEFAULT_PURPOSE
+    assert infer_purpose_from_name("Unrecognized Room") == DEFAULT_PURPOSE
+
+    kitchen = infer_purpose_from_name("Kitchen")
+    bedroom = infer_purpose_from_name("Master Bedroom")
+    bathroom = infer_purpose_from_name("Guest Bathroom")
+    office = infer_purpose_from_name("Home Office")
+    hallway = infer_purpose_from_name("Main Hallway")
+
+    for inferred in (kitchen, bedroom, bathroom, office, hallway):
+        assert inferred in PURPOSE_DEFINITIONS
+        assert inferred != DEFAULT_PURPOSE
+
+    assert infer_purpose_from_name("Living Room") == DEFAULT_PURPOSE
+    assert infer_purpose_from_name("KITCHEN") == kitchen
+    assert infer_purpose_from_name("master bedroom") == bedroom
+    assert len({kitchen, bedroom, bathroom, office, hallway}) >= 4
+
+
+def test_build_suggested_area_config() -> None:
+    """Suggested area configuration populates area ID, discovery flag, and purpose."""
+    hass = Mock()
+    area_reg = Mock()
+    area_reg.async_get_area.return_value = SimpleNamespace(
+        id="bedroom", name="Master Bedroom"
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            return_value={CONF_MOTION_SENSORS: ["binary_sensor.bed_motion"]},
+        ),
+    ):
+        suggested = build_suggested_area_config(hass, "bedroom")
+
+    assert suggested[CONF_AREA_ID] == "bedroom"
+    assert suggested[CONF_AUTO_DISCOVER_SENSORS] is True
+    assert suggested[CONF_PURPOSE] == infer_purpose_from_name("Master Bedroom")
+
+
+def test_discover_eligible_areas_filters_and_sorts() -> None:
+    """Only unexcluded areas with discoverable motion sensors are returned."""
+    hass = Mock()
+    areas = [
+        SimpleNamespace(id="kitchen", name="Kitchen"),
+        SimpleNamespace(id="attic", name="Attic"),
+        SimpleNamespace(id="bedroom", name="Bedroom"),
+        SimpleNamespace(id="dining", name="Dining Room"),
+    ]
+    area_reg = Mock()
+    area_reg.async_list_areas.return_value = areas
+    area_reg.async_get_area.side_effect = lambda area_id: next(
+        (a for a in areas if a.id == area_id), None
+    )
+
+    def _discover_sensors(_hass: Any, area_id: str) -> dict[str, list[str]]:
+        if area_id == "attic":
+            return {}
+        return {CONF_MOTION_SENSORS: [f"binary_sensor.{area_id}_motion"]}
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            side_effect=_discover_sensors,
+        ),
+    ):
+        eligible = discover_eligible_areas(hass, excluded_area_ids={"dining"})
+
+    assert [item[CONF_AREA_ID] for item in eligible] == ["bedroom", "kitchen"]
+
+
+def test_async_trigger_area_discoveries_creates_and_aborts() -> None:
+    """Discovery trigger creates flows for new eligible areas and aborts stale ones."""
+    hass = Mock()
+    hass.data = {}
+    active_entry = SimpleNamespace(
+        source="user",
+        data={},
+        options={},
+        subentries={
+            "sub_living": SimpleNamespace(
+                subentry_type=SUBENTRY_TYPE_AREA,
+                data={CONF_AREA_ID: "living_room"},
+            )
+        },
+    )
+    ignored_entry = SimpleNamespace(
+        source=SOURCE_IGNORE,
+        unique_id=area_discovery_unique_id("garage"),
+        data={},
+        options={},
+        subentries={},
+    )
+    hass.config_entries.async_entries.return_value = [active_entry, ignored_entry]
+    hass.config_entries.flow.async_progress_by_handler.return_value = [
+        {
+            "flow_id": "flow_kitchen",
+            "context": {
+                "source": SOURCE_INTEGRATION_DISCOVERY,
+                "unique_id": area_discovery_unique_id("kitchen"),
+            },
+        },
+        {
+            "flow_id": "flow_stale",
+            "context": {
+                "source": SOURCE_INTEGRATION_DISCOVERY,
+                "unique_id": area_discovery_unique_id("attic"),
+            },
+        },
+    ]
+
+    area_reg = Mock()
+    area_lookup = {
+        "bedroom": SimpleNamespace(id="bedroom", name="Bedroom"),
+        "garage": SimpleNamespace(id="garage", name="Garage"),
+        "kitchen": SimpleNamespace(id="kitchen", name="Kitchen"),
+        "living_room": SimpleNamespace(id="living_room", name="Living Room"),
+    }
+    area_reg.async_get_area.side_effect = area_lookup.get
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.discover_eligible_areas",
+            return_value=[
+                {
+                    CONF_AREA_ID: "bedroom",
+                    CONF_PURPOSE: infer_purpose_from_name("Bedroom"),
+                },
+                {
+                    CONF_AREA_ID: "garage",
+                    CONF_PURPOSE: infer_purpose_from_name("Garage"),
+                },
+                {
+                    CONF_AREA_ID: "kitchen",
+                    CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
+                },
+            ],
+        ) as mock_discover,
+        patch(
+            "custom_components.area_occupancy.discovery.discovery_flow.async_create_flow"
+        ) as mock_create_flow,
+    ):
+        async_trigger_area_discoveries(hass)
+
+    assert mock_discover.call_args.kwargs["excluded_area_ids"] == {"living_room"}
+    assert [
+        call.kwargs["data"][CONF_AREA_ID] for call in mock_create_flow.call_args_list
+    ] == ["bedroom", "kitchen"]
+    assert all(
+        call.kwargs["context"] == {"source": SOURCE_INTEGRATION_DISCOVERY}
+        for call in mock_create_flow.call_args_list
+    )
+    hass.config_entries.flow.async_abort.assert_called_once_with("flow_stale")
