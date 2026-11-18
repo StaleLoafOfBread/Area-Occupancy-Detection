@@ -208,7 +208,6 @@ def _classify_entity(
             entry.platform == DOMAIN
             or is_weather_entity(entry.entity_id, entry.platform)
             or entry.disabled_by is not None
-            or entry.hidden_by is not None
             or entry.entity_category is not None
         ):
             return None
@@ -246,9 +245,9 @@ def discover_area_sensors(
 ) -> dict[str, list[str]]:
     """Return eligible discoverable entities grouped by sensor config key for an area.
 
-    Disabled, hidden, diagnostic/config, integration-owned, and outdoor weather
-    entities are excluded. When ``expand_groups`` is enabled, group entities are
-    replaced by their domain-filtered member entities.
+    Disabled, diagnostic/config, integration-owned, and outdoor weather entities
+    are excluded. When ``expand_groups`` is enabled, group entities are replaced
+    by their domain-filtered member entities.
     """
     if not area_id:
         return {}
@@ -262,7 +261,6 @@ def discover_area_sensors(
             entry.platform == DOMAIN
             or is_weather_entity(entry.entity_id, entry.platform)
             or entry.disabled_by is not None
-            or entry.hidden_by is not None
             or entry.entity_category is not None
         ):
             continue
@@ -513,7 +511,6 @@ def async_track_discovery(
             "device_class",
             "original_device_class",
             "disabled_by",
-            "hidden_by",
             "entity_category",
             "entity_id",
         }.intersection(event.data.get("changes", {})):

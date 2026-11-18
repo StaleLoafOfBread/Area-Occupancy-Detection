@@ -137,7 +137,6 @@ def test_device_area_and_entity_override() -> None:
         {"platform": "area_occupancy"},
         {"platform": "weather", "original_device_class": "temperature"},
         {"disabled_by": "user"},
-        {"hidden_by": "user"},
         {"entity_category": "diagnostic"},
         {"area_id": "elsewhere"},
     ],
@@ -150,6 +149,20 @@ def test_ineligible_entities_are_ignored(overrides: dict[str, Any]) -> None:
         else "lock.ignored"
     )
     assert resolve(data, entity(entity_id, **overrides)) == data
+
+
+def test_hidden_entities_are_discovered() -> None:
+    """Enabled entities hidden from the UI are still eligible for discovery."""
+    data = {"area_id": "room", "auto_discover_sensors": True}
+    result = resolve(
+        data,
+        entity(
+            "sensor.office_co2",
+            original_device_class="carbon_dioxide",
+            hidden_by="user",
+        ),
+    )
+    assert result["co2_sensors"] == ["sensor.office_co2"]
 
 
 def test_weather_keyword_entities_are_ignored() -> None:
