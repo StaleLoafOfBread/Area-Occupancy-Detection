@@ -567,9 +567,7 @@ def resolve_area_sensors(
         for key, entity_ids in raw_tracked_auto.items():
             if key in ALL_AREA_SENSOR_KEYS and isinstance(entity_ids, list):
                 tracked_auto[key] = [
-                    entity_id
-                    for entity_id in entity_ids
-                    if isinstance(entity_id, str)
+                    entity_id for entity_id in entity_ids if isinstance(entity_id, str)
                 ]
 
     excluded = set(data.get(CONF_EXCLUDED_SENSORS) or [])
@@ -634,9 +632,7 @@ def resolve_area_sensors(
         stale_auto_ids = set(tracked_auto.get(key, [])) - eligible_ids
         if stale_auto_ids:
             resolved[key] = [
-                entity_id
-                for entity_id in existing
-                if entity_id not in stale_auto_ids
+                entity_id for entity_id in existing if entity_id not in stale_auto_ids
             ]
 
     resolved_auto: dict[str, list[str]] = {}
@@ -649,20 +645,22 @@ def resolve_area_sensors(
         if additions:
             resolved[key] = [*resolved.get(key, []), *additions]
         previously_auto = tracked_auto.get(key, [])
-        resolved_auto[key] = list(
-            dict.fromkeys(
-                [
-                    entity_id
-                    for entity_id in (*previously_auto, *additions)
-                    if entity_id in eligible_discovered
-                ]
+        resolved_auto[key] = (
+            list(
+                dict.fromkeys(
+                    [
+                        entity_id
+                        for entity_id in (*previously_auto, *additions)
+                        if entity_id in eligible_discovered
+                    ]
+                )
             )
-        ) if (eligible_discovered := set(entity_ids)) else []
+            if (eligible_discovered := set(entity_ids))
+            else []
+        )
 
     resolved[CONF_AUTO_ADDED_SENSORS] = {
-        key: entity_ids
-        for key, entity_ids in resolved_auto.items()
-        if entity_ids
+        key: entity_ids for key, entity_ids in resolved_auto.items() if entity_ids
     }
 
     return resolved

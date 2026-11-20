@@ -1740,9 +1740,7 @@ def _sync_discovered_and_excluded(
         for key, entity_ids in raw_auto.items():
             if isinstance(entity_ids, list):
                 tracked_auto[key] = [
-                    entity_id
-                    for entity_id in entity_ids
-                    if isinstance(entity_id, str)
+                    entity_id for entity_id in entity_ids if isinstance(entity_id, str)
                 ]
 
     if not hass:

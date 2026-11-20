@@ -936,9 +936,7 @@ def test_auto_added_provenance_removed_but_explicit_selection_kept() -> None:
         CONF_AREA_ID: "office",
         CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
         CONF_EXPAND_GROUPS: False,
-        CONF_AUTO_ADDED_SENSORS: {
-            CONF_POWER_SENSORS: ["sensor.powercalc_auto"]
-        },
+        CONF_AUTO_ADDED_SENSORS: {CONF_POWER_SENSORS: ["sensor.powercalc_auto"]},
         CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
     }
 

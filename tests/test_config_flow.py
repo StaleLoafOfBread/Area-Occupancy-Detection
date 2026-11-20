@@ -3179,9 +3179,9 @@ async def test_motion_step_prepopulates_discovered_and_excludes_removed(
     assert flow._area_config_draft[CONF_MOTION_SENSORS] == [
         "binary_sensor.motion_auto_1"
     ]
-    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
-        CONF_MOTION_SENSORS
-    ] == ["binary_sensor.motion_auto_1"]
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][CONF_MOTION_SENSORS] == [
+        "binary_sensor.motion_auto_1"
+    ]
 
 
 def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
@@ -3192,13 +3192,9 @@ def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
         CONF_AUTO_DISCOVER_SENSORS: True,
         CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
         CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
-        CONF_AUTO_ADDED_SENSORS: {
-            CONF_POWER_SENSORS: ["sensor.powercalc_auto"]
-        },
+        CONF_AUTO_ADDED_SENSORS: {CONF_POWER_SENSORS: ["sensor.powercalc_auto"]},
     }
-    submitted = {
-        CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"]
-    }
+    submitted = {CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"]}
 
     with patch(
         "custom_components.area_occupancy.config_flow.discover_area_sensors",
@@ -3257,9 +3253,7 @@ async def test_sensors_step_prepopulates_discovered_and_tracks_unchecked_entity(
 
     next_step.assert_awaited_once()
     assert CONF_EXCLUDED_SENSORS not in flow._area_config_draft
-    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == [
-        "sensor.temp_auto"
-    ]
+    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == ["sensor.temp_auto"]
     assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
         CONF_TEMPERATURE_SENSORS
     ] == ["sensor.temp_auto"]
