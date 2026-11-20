@@ -31,6 +31,7 @@ from custom_components.area_occupancy.data.purpose import (
 )
 from custom_components.area_occupancy.discovery import (
     DISCOVERABLE_SENSOR_KEYS,
+    _is_light_power_sensor,
     area_discovery_unique_id,
     async_track_discovery,
     async_trigger_area_discoveries,
@@ -88,6 +89,214 @@ def test_disabling_discovery_stays_manual() -> None:
         "motion_sensors": ["binary_sensor.manual"],
     }
     assert resolve(data, entity("binary_sensor.new", device_class="motion")) == data
+
+
+def test_resolve_none_sensor_list() -> None:
+    """A None sensor list accepts automatic discovery additions."""
+    result = resolve(
+        {CONF_AREA_ID: "room", CONF_MOTION_SENSORS: None},
+        entity("binary_sensor.new", device_class="motion"),
+    )
+    assert result[CONF_MOTION_SENSORS] == ["binary_sensor.new"]
+
+
+def test_light_power_member_entities_set() -> None:
+    """Powercalc YAML groups can be detected from their entities attribute."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={
+            "device_class": "power",
+            "entities": {"light.ikea_lamp", "light.bedside_lamp"},
+        }
+    )
+    entry = entity(
+        "sensor.ikea_lamp_power",
+        platform="powercalc",
+        device_class="power",
+        original_device_class="power",
+    )
+
+    assert _is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
+
+
+def test_nested_light_power_groups_are_excluded() -> None:
+    """Nested Powercalc groups resolve their light-backed power members."""
+    desk_lamp = _reg_entry(
+        "sensor.desk_lamp_power", area_id="office", device_class="power"
+    )
+    ceiling_group = _reg_entry(
+        "sensor.ceiling_group_power", area_id="office", device_class="power"
+    )
+    all_lights = _reg_entry(
+        "sensor.all_lights_power", area_id="office", device_class="power"
+    )
+    for entry in (desk_lamp, ceiling_group, all_lights):
+        entry.platform = "powercalc"
+
+    hass, registry, _ = _make_group_hass(
+        entities=[desk_lamp, ceiling_group, all_lights],
+        states={
+            "sensor.desk_lamp_power": {"source_domain": "light"},
+            "sensor.ceiling_group_power": {"entities": ["sensor.desk_lamp_power"]},
+            "sensor.all_lights_power": {"entities": ["sensor.ceiling_group_power"]},
+        },
+    )
+
+    assert _is_light_power_sensor(hass, "sensor.all_lights_power", registry=registry)
+
+
+def test_mixed_powercalc_group_is_not_light_power() -> None:
+    """A group containing non-light power is not excluded as light power."""
+    desk_lamp = _reg_entry(
+        "sensor.desk_lamp_power", area_id="office", device_class="power"
+    )
+    light_group = _reg_entry(
+        "sensor.light_group_power", area_id="office", device_class="power"
+    )
+    appliance_power = _reg_entry(
+        "sensor.appliance_power", area_id="office", device_class="power"
+    )
+    desk_lamp.platform = light_group.platform = "powercalc"
+    appliance_power.platform = "zha"
+
+    hass, registry, _ = _make_group_hass(
+        entities=[desk_lamp, light_group, appliance_power],
+        states={
+            "sensor.desk_lamp_power": {"source_domain": "light"},
+            "sensor.light_group_power": {
+                "entities": ["sensor.desk_lamp_power", "sensor.appliance_power"]
+            },
+        },
+    )
+
+    assert not _is_light_power_sensor(
+        hass, "sensor.light_group_power", registry=registry
+    )
+
+
+def test_cyclic_powercalc_groups_are_not_light_power() -> None:
+    """Cyclic Powercalc groups terminate without being classified as light power."""
+    first_group = _reg_entry(
+        "sensor.first_group_power", area_id="office", device_class="power"
+    )
+    second_group = _reg_entry(
+        "sensor.second_group_power", area_id="office", device_class="power"
+    )
+    first_group.platform = second_group.platform = "powercalc"
+
+    hass, registry, _ = _make_group_hass(
+        entities=[first_group, second_group],
+        states={
+            "sensor.first_group_power": {"entities": ["sensor.second_group_power"]},
+            "sensor.second_group_power": {"entities": ["sensor.first_group_power"]},
+        },
+    )
+
+    assert not _is_light_power_sensor(
+        hass, "sensor.first_group_power", registry=registry
+    )
+
+
+def test_light_power_source_entity_is_detected() -> None:
+    """Powercalc source_entity metadata identifies a light without source_domain."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={"source_entity": "light.desk_lamp"}
+    )
+    entry = entity(
+        "sensor.desk_lamp_power",
+        platform="powercalc",
+        device_class="power",
+        original_device_class="power",
+    )
+
+    assert _is_light_power_sensor(hass, "sensor.desk_lamp_power", entry=entry)
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "attrs"),
+    [
+        (
+            "sensor.mixed_group_power",
+            {"entities": ["light.ikea_lamp", "switch.ikea_plug"]},
+        ),
+        ("sensor.vacuum_power", {"source_domain": "vacuum"}),
+    ],
+)
+def test_non_light_power_attributes_are_not_excluded(
+    entity_id: str, attrs: dict[str, Any]
+) -> None:
+    """Mixed groups and non-light sources are not classified as light power."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={"device_class": "power", **attrs}
+    )
+    entry = entity(
+        entity_id,
+        platform="powercalc",
+        device_class="power",
+        original_device_class="power",
+    )
+
+    assert not _is_light_power_sensor(hass, entity_id, entry=entry)
+
+
+def test_non_sensor_entity_is_not_light_power() -> None:
+    """A light entity itself is never treated as a power sensor."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={"source_domain": "light"}
+    )
+
+    assert not _is_light_power_sensor(hass, "light.ikea_lamp")
+    hass.states.get.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        None,
+        entity(
+            "sensor.ikea_lamp_power",
+            platform="zha",
+            device_class="power",
+            original_device_class="power",
+        ),
+    ],
+)
+def test_light_source_requires_powercalc_entry(entry: SimpleNamespace | None) -> None:
+    """Light source metadata alone does not qualify a non-Powercalc entity."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={"device_class": "power", "source_domain": "light"}
+    )
+    registry = SimpleNamespace(entities={})
+
+    assert not _is_light_power_sensor(
+        hass,
+        "sensor.ikea_lamp_power",
+        entry=entry,
+        registry=registry,
+    )
+
+
+@pytest.mark.parametrize("device_class", ["energy", "current", None])
+def test_light_source_requires_power_device_class(
+    device_class: str | None,
+) -> None:
+    """Light-backed Powercalc entities must measure power specifically."""
+    hass = Mock()
+    hass.states.get.return_value = SimpleNamespace(
+        attributes={"source_domain": "light"}
+    )
+    entry = entity(
+        "sensor.ikea_lamp_power",
+        platform="powercalc",
+        device_class=device_class,
+        original_device_class=device_class,
+    )
+
+    assert not _is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
 
 
 @pytest.mark.parametrize(
@@ -957,14 +1166,10 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
     )
     lamp_power.platform = "powercalc"
 
-    ceiling_light = _reg_entry("light.office_ceiling", area_id="office")
-    ceiling_light.platform = "mqtt"
-    ceiling_light.device_id = "dev_ceiling"
-    ceiling_power = _reg_entry(
+    ceiling_group_power = _reg_entry(
         "sensor.office_ceiling_power", area_id="office", device_class="power"
     )
-    ceiling_power.platform = "powercalc"
-    ceiling_power.device_id = "dev_ceiling"
+    ceiling_group_power.platform = "powercalc"
 
     rosey_power = _reg_entry(
         "sensor.rosey_power", area_id="office", device_class="power"
@@ -977,7 +1182,7 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
     desk_plug.platform = "zha"
 
     hass, registry, devices = _make_group_hass(
-        entities=[lamp_power, ceiling_light, ceiling_power, rosey_power, desk_plug],
+        entities=[lamp_power, ceiling_group_power, rosey_power, desk_plug],
         states={
             "sensor.desk_lamp_power": {
                 "device_class": "power",
@@ -988,6 +1193,10 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
                 "device_class": "power",
                 "source_domain": "vacuum",
                 "source_entity": "vacuum.rosey_the_robot",
+            },
+            "sensor.office_ceiling_power": {
+                "device_class": "power",
+                "entities": ["sensor.desk_lamp_power"],
             },
         },
     )

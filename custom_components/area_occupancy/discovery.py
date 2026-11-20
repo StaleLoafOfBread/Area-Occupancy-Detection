@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import datetime
 from typing import Any, Final
 
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     SOURCE_IGNORE,
     SOURCE_INTEGRATION_DISCOVERY,
@@ -109,6 +110,7 @@ DISCOVERABLE_SENSOR_KEYS: Final[tuple[str, ...]] = tuple(
         )
     )
 )
+_POWERCALC_PLATFORM: Final = "powercalc"
 ALL_AREA_SENSOR_KEYS: Final[tuple[str, ...]] = (
     *DISCOVERABLE_SENSOR_KEYS,
     CONF_CUSTOM_BINARY_SENSORS,
@@ -251,23 +253,6 @@ def _expand_group_entity(
     return list(dict.fromkeys(expanded))
 
 
-_POWERCALC_PLATFORM: Final = "powercalc"
-_NON_LIGHT_SOURCE_DOMAINS: Final[frozenset[str]] = frozenset(
-    {
-        "climate",
-        "cover",
-        "fan",
-        "humidifier",
-        "lawn_mower",
-        "lock",
-        "media_player",
-        "switch",
-        "vacuum",
-        "water_heater",
-    }
-)
-
-
 def _normalize_excluded_platforms(
     excluded_platforms: Collection[str] | None,
 ) -> set[str]:
@@ -277,11 +262,9 @@ def _normalize_excluded_platforms(
     return {p.lower() for p in excluded_platforms if isinstance(p, str) and p}
 
 
-def _entry_source_domain(hass: HomeAssistant, entity_id: str) -> str | None:
+def _source_domain_from_attrs(attrs: Mapping[str, Any] | None) -> str | None:
     """Return the source entity domain exposed in state attributes, if any."""
-    state = hass.states.get(entity_id)
-    attrs = getattr(state, "attributes", None) if state else None
-    if not attrs:
+    if not isinstance(attrs, Mapping):
         return None
     source_domain = attrs.get("source_domain")
     if isinstance(source_domain, str) and source_domain:
@@ -292,39 +275,57 @@ def _entry_source_domain(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
+def _entry_source_domain(hass: HomeAssistant, entity_id: str) -> str | None:
+    """Return the source entity domain exposed in state attributes, if any."""
+    state = hass.states.get(entity_id)
+    attrs = getattr(state, "attributes", None) if state else None
+    return _source_domain_from_attrs(attrs)
+
+
 def _is_light_power_sensor(
     hass: HomeAssistant,
-    registry: er.EntityRegistry,
     entity_id: str,
-    entry: er.RegistryEntry | None,
+    entry: er.RegistryEntry | None = None,
+    registry: er.EntityRegistry | None = None,
+    _visited: frozenset[str] = frozenset(),
 ) -> bool:
     """Return True if a power sensor tracks light entities (e.g., Powercalc lights)."""
-    if _entry_source_domain(hass, entity_id) == Platform.LIGHT:
-        return True
-    if entry is None or entry.platform != _POWERCALC_PLATFORM:
+    if entity_id in _visited or not entity_id.startswith(f"{Platform.SENSOR}."):
+        return False
+
+    if entry is None:
+        entry = _lookup_registry_entry(hass, entity_id, registry)
+    if entry is None or (entry.platform or "").lower() != _POWERCALC_PLATFORM:
         return False
 
     state = hass.states.get(entity_id)
     attrs = getattr(state, "attributes", None) if state else None
-    member_entities = attrs.get("entities") if attrs else None
-    if isinstance(member_entities, (list, tuple)) and member_entities:
+    device_class = (
+        entry.device_class
+        or (attrs.get("device_class") if isinstance(attrs, Mapping) else None)
+        or entry.original_device_class
+    )
+    if device_class != SensorDeviceClass.POWER:
+        return False
+
+    if _source_domain_from_attrs(attrs) == Platform.LIGHT:
+        return True
+
+    member_entities = attrs.get("entities") if isinstance(attrs, Mapping) else None
+    if isinstance(member_entities, (list, tuple, set, frozenset)) and member_entities:
         return all(
-            isinstance(member, str) and member.startswith(f"{Platform.LIGHT}.")
+            isinstance(member, str)
+            and (
+                member.startswith(f"{Platform.LIGHT}.")
+                or _is_light_power_sensor(
+                    hass,
+                    member,
+                    registry=registry,
+                    _visited=_visited | {entity_id},
+                )
+            )
             for member in member_entities
         )
-
-    if state is None and entry.device_id:
-        entities = getattr(registry, "entities", None)
-        if isinstance(entities, dict):
-            sibling_domains = {
-                other.domain
-                for other in entities.values()
-                if other.device_id == entry.device_id
-            }
-            if Platform.LIGHT in sibling_domains and not sibling_domains.intersection(
-                _NON_LIGHT_SOURCE_DOMAINS
-            ):
-                return True
     return False
 
 
@@ -402,7 +403,7 @@ def _classify_entity(
         if (
             key == CONF_POWER_SENSORS
             and exclude_light_power
-            and _is_light_power_sensor(hass, registry, entity_id, entry)
+            and _is_light_power_sensor(hass, entity_id, entry=entry, registry=registry)
         ):
             return None
         return key
@@ -610,7 +611,9 @@ def resolve_area_sensors(
         return resolved
 
     manual = {
-        entity_id for key in ALL_AREA_SENSOR_KEYS for entity_id in resolved.get(key, [])
+        entity_id
+        for key in ALL_AREA_SENSOR_KEYS
+        for entity_id in (resolved.get(key) or ())
     }
     discovered = discover_area_sensors(
         hass,
@@ -643,7 +646,7 @@ def resolve_area_sensors(
             if entity_id not in excluded and entity_id not in manual
         ]
         if additions:
-            resolved[key] = [*resolved.get(key, []), *additions]
+            resolved[key] = [*(resolved.get(key) or ()), *additions]
         previously_auto = tracked_auto.get(key, [])
         resolved_auto[key] = (
             list(
