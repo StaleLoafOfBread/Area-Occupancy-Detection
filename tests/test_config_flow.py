@@ -13,12 +13,16 @@ import voluptuous as vol
 
 from custom_components.area_occupancy.config_flow import (
     AREA_EDIT_SPOKES,
+    AUTO_ADDED_ENTITIES_FIELD,
+    AUTO_ADDED_SECTION,
+    EXPLICIT_SECTION,
     SECTION_AUTO_DISCOVERY_TYPES,
     SENSOR_GROUPS,
     AreaOccupancyConfigFlow,
     AreaOccupancyOptionsFlow,
     AreaSubentryFlowHandler,
     BaseOccupancyFlow,
+    _auto_added_sensor_text,
     _build_area_description_placeholders,
     _create_area_selector_schema,
     _create_basics_step_schema,
@@ -27,6 +31,7 @@ from custom_components.area_occupancy.config_flow import (
     _create_motion_step_schema,
     _create_sensors_step_schema,
     _entity_contains_keyword,
+    _explicit_sensor_config,
     _find_area_by_sanitized_id,
     _format_seconds,
     _get_area_summary_info,
@@ -91,6 +96,7 @@ from custom_components.area_occupancy.const import (
     CONF_WEIGHT_CUSTOM_NUMERIC,
     CONF_WEIGHT_MEDIA,
     CONF_WEIGHT_MOTION,
+    CONF_WEIGHT_POWER,
     CONF_WEIGHT_WIFI_CLIENTS,
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_ACTIVE_STATE,
@@ -960,7 +966,13 @@ class TestHelperFunctions:
         def field_names(schema_dict):
             return {getattr(key, "schema", None) for key in schema_dict}
 
-        motion_fields = field_names(_create_motion_step_schema(hass))
+        motion_schema = _create_motion_step_schema(hass)
+        explicit_motion = next(
+            value
+            for marker, value in motion_schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        motion_fields = field_names(explicit_motion.schema.schema)
         assert CONF_MOTION_PROB_GIVEN_TRUE in motion_fields
         assert CONF_MOTION_PROB_GIVEN_FALSE in motion_fields
 
@@ -2058,13 +2070,16 @@ class TestNewHelperFunctions:
             CONF_WEIGHT_WIFI_CLIENTS: 0.42,
         }
 
-    def test_sensors_step_schema_includes_wifi_clients_section(self, hass):
-        """Test that the sensors step schema exposes a wifi_clients section."""
+    def test_sensors_step_schema_includes_wifi_clients_field(self, hass):
+        """Test that the sensors step schema exposes the Wi-Fi client field."""
         schema_dict = _create_sensors_step_schema(hass)
-        section_names = {
-            key.schema if hasattr(key, "schema") else key for key in schema_dict
-        }
-        assert "wifi_clients" in section_names
+        explicit = next(
+            value
+            for marker, value in schema_dict.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        field_names = {marker.schema for marker in explicit.schema.schema}
+        assert CONF_WIFI_CLIENTS_SENSORS in field_names
 
     def test_flatten_sectioned_input_custom(self):
         """Test flattening the custom section like other sensor sections."""
@@ -2094,13 +2109,16 @@ class TestNewHelperFunctions:
             CONF_WEIGHT_CUSTOM_NUMERIC: 0.25,
         }
 
-    def test_sensors_step_schema_includes_custom_section(self, hass):
-        """Test that the sensors step schema exposes a custom section."""
+    def test_sensors_step_schema_includes_custom_sensor_fields(self, hass):
+        """Test that the sensors step schema exposes custom sensor fields."""
         schema_dict = _create_sensors_step_schema(hass)
-        section_names = {
-            key.schema if hasattr(key, "schema") else key for key in schema_dict
-        }
-        assert "custom" in section_names
+        explicit = next(
+            value
+            for marker, value in schema_dict.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        field_names = {marker.schema for marker in explicit.schema.schema}
+        assert CONF_CUSTOM_BINARY_SENSORS in field_names
 
     @pytest.mark.parametrize(
         ("areas", "search_name", "expected_found", "expected_name"),
@@ -2626,11 +2644,18 @@ class TestSectionEditing:
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "area_sensors"
         assert result["last_step"] is True
-        assert [marker.schema for marker in result["data_schema"].schema] == ["media"]
+        explicit = next(
+            value
+            for marker, value in result["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        assert CONF_MEDIA_DEVICES in {
+            marker.schema for marker in explicit.schema.schema
+        }
 
         result = await flow.async_step_area_sensors(
             {
-                "media": {
+                EXPLICIT_SECTION: {
                     CONF_MEDIA_DEVICES: ["media_player.tv"],
                     CONF_MEDIA_ACTIVE_STATES: ["playing"],
                     CONF_WEIGHT_MEDIA: 0.7,
@@ -2671,11 +2696,22 @@ class TestSectionEditing:
 
     def test_sensors_schema_group_filter(self, hass: HomeAssistant) -> None:
         full = _create_sensors_step_schema(hass, include_entities=_empty_entities(hass))
-        assert [m.schema for m in full] == list(SENSOR_GROUPS)
+        full_explicit = next(
+            value for marker, value in full.items() if marker.schema == EXPLICIT_SECTION
+        )
+        full_fields = {marker.schema for marker in full_explicit.schema.schema}
+        assert CONF_POWER_SENSORS in full_fields
+        assert CONF_CUSTOM_BINARY_SENSORS in full_fields
         only_power = _create_sensors_step_schema(
             hass, include_entities=_empty_entities(hass), groups=("power",)
         )
-        assert [m.schema for m in only_power] == ["power"]
+        power_explicit = next(
+            value
+            for marker, value in only_power.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        power_fields = {marker.schema for marker in power_explicit.schema.schema}
+        assert power_fields == {CONF_POWER_SENSORS, CONF_WEIGHT_POWER}
 
 
 def _empty_entities(hass: HomeAssistant) -> dict[str, list[str]]:
@@ -2814,7 +2850,14 @@ class TestCustomSensorsSpoke:
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "area_sensors"
-        assert [marker.schema for marker in result["data_schema"].schema] == ["custom"]
+        explicit = next(
+            value
+            for marker, value in result["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        assert CONF_CUSTOM_BINARY_SENSORS in {
+            marker.schema for marker in explicit.schema.schema
+        }
 
     async def test_saving_entities_persists_them(
         self, config_flow_options_flow
@@ -2825,7 +2868,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_BINARY_SENSORS: ["sensor.pc"],
                     CONF_CUSTOM_BINARY_ACTIVE_STATES: ["in_use"],
                 }
@@ -2848,7 +2891,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_BINARY_SENSORS: ["sensor.pc"],
                     CONF_CUSTOM_BINARY_ACTIVE_STATES: [],
                 }
@@ -2869,7 +2912,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_NUMERIC_SENSORS: ["sensor.counter"],
                     CONF_CUSTOM_NUMERIC_ACTIVE_MIN: 10.0,
                     CONF_CUSTOM_NUMERIC_ACTIVE_MAX: 2.0,
@@ -3135,7 +3178,7 @@ async def test_automatic_motion_satisfies_wizard(
     assert flow._area_config_draft[CONF_MOTION_SENSORS] == []
 
 
-async def test_motion_step_prepopulates_discovered_and_excludes_removed(
+async def test_motion_step_separates_readonly_discovery_from_explicit_selection(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
     flow = config_flow_flow
@@ -3157,30 +3200,57 @@ async def test_motion_step_prepopulates_discovered_and_excludes_removed(
         ),
     ):
         form = await flow.async_step_area_motion()
-        motion_marker = next(
-            k for k in form["data_schema"].schema if k.schema == CONF_MOTION_SENSORS
+        assert [marker.schema for marker in form["data_schema"].schema] == [
+            AUTO_ADDED_SECTION,
+            EXPLICIT_SECTION,
+        ]
+        auto_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == AUTO_ADDED_SECTION
         )
-        assert motion_marker.description == {
-            "suggested_value": [
-                "binary_sensor.motion_auto_1",
-                "binary_sensor.motion_auto_2",
-            ]
-        }
+        auto_marker = next(
+            marker
+            for marker in auto_section.schema.schema
+            if marker.schema == AUTO_ADDED_ENTITIES_FIELD
+        )
+        assert auto_section.schema.schema[auto_marker].config["read_only"]
+        assert (
+            "binary_sensor.motion_auto_1" in auto_marker.description["suggested_value"]
+        )
+
+        explicit_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        motion_marker = next(
+            marker
+            for marker in explicit_section.schema.schema
+            if marker.schema == CONF_MOTION_SENSORS
+        )
+        assert motion_marker.description is None
 
         with patch.object(
             flow, "async_step_area_sensors", new_callable=AsyncMock
         ) as next_step:
             await flow.async_step_area_motion(
-                {CONF_MOTION_SENSORS: ["binary_sensor.motion_auto_1"]}
+                {
+                    AUTO_ADDED_SECTION: {
+                        AUTO_ADDED_ENTITIES_FIELD: "tampered value",
+                    },
+                    EXPLICIT_SECTION: {CONF_MOTION_SENSORS: []},
+                }
             )
 
     next_step.assert_awaited_once()
-    assert CONF_EXCLUDED_SENSORS not in flow._area_config_draft
     assert flow._area_config_draft[CONF_MOTION_SENSORS] == [
-        "binary_sensor.motion_auto_1"
+        "binary_sensor.motion_auto_1",
+        "binary_sensor.motion_auto_2",
     ]
     assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][CONF_MOTION_SENSORS] == [
-        "binary_sensor.motion_auto_1"
+        "binary_sensor.motion_auto_1",
+        "binary_sensor.motion_auto_2",
     ]
 
 
@@ -3193,8 +3263,10 @@ def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
         CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
         CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
         CONF_AUTO_ADDED_SENSORS: {CONF_POWER_SENSORS: ["sensor.powercalc_auto"]},
+        CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"],
     }
-    submitted = {CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"]}
+    draft[CONF_AUTO_ADDED_SENSORS][CONF_MOTION_SENSORS] = ["binary_sensor.motion_auto"]
+    submitted = {CONF_POWER_SENSORS: ["sensor.explicit_power"]}
 
     with patch(
         "custom_components.area_occupancy.config_flow.discover_area_sensors",
@@ -3208,10 +3280,12 @@ def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
         )
 
     assert synced[CONF_POWER_SENSORS] == ["sensor.explicit_power"]
-    assert synced[CONF_AUTO_ADDED_SENSORS] == {}
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"]
+    }
 
 
-async def test_sensors_step_prepopulates_discovered_and_tracks_unchecked_entity(
+async def test_sensors_step_separates_readonly_discovery_from_explicit_selection(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
     flow = config_flow_flow
@@ -3232,31 +3306,80 @@ async def test_sensors_step_prepopulates_discovered_and_tracks_unchecked_entity(
         ),
     ):
         form = await flow.async_step_area_sensors()
-        env_section = next(
-            v
-            for k, v in form["data_schema"].schema.items()
-            if k.schema == "environmental"
+        assert [marker.schema for marker in form["data_schema"].schema] == [
+            AUTO_ADDED_SECTION,
+            EXPLICIT_SECTION,
+        ]
+        auto_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == AUTO_ADDED_SECTION
+        )
+        auto_marker = next(
+            marker
+            for marker in auto_section.schema.schema
+            if marker.schema == AUTO_ADDED_ENTITIES_FIELD
+        )
+        assert auto_section.schema.schema[auto_marker].config["read_only"]
+        assert "sensor.temp_auto" in auto_marker.description["suggested_value"]
+        assert "sensor.temp_ignore" in auto_marker.description["suggested_value"]
+
+        explicit_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
         )
         temp_marker = next(
-            k for k in env_section.schema.schema if k.schema == CONF_TEMPERATURE_SENSORS
+            marker
+            for marker in explicit_section.schema.schema
+            if marker.schema == CONF_TEMPERATURE_SENSORS
         )
-        assert temp_marker.description == {
-            "suggested_value": ["sensor.temp_auto", "sensor.temp_ignore"]
-        }
+        assert temp_marker.description is None
 
         with patch.object(
             flow, "async_step_area_behavior", new_callable=AsyncMock
         ) as next_step:
             await flow.async_step_area_sensors(
-                {"environmental": {CONF_TEMPERATURE_SENSORS: ["sensor.temp_auto"]}}
+                {
+                    AUTO_ADDED_SECTION: {
+                        AUTO_ADDED_ENTITIES_FIELD: "tampered value",
+                    },
+                    EXPLICIT_SECTION: {CONF_TEMPERATURE_SENSORS: []},
+                }
             )
 
     next_step.assert_awaited_once()
-    assert CONF_EXCLUDED_SENSORS not in flow._area_config_draft
-    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == ["sensor.temp_auto"]
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
+    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == [
+        "sensor.temp_auto",
+        "sensor.temp_ignore",
+    ]
     assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
         CONF_TEMPERATURE_SENSORS
-    ] == ["sensor.temp_auto"]
+    ] == ["sensor.temp_auto", "sensor.temp_ignore"]
+
+
+def test_sensor_sections_format_automatic_and_explicit_entities(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    """Automatic entities are listed read-only and excluded from explicit selectors."""
+    flow = config_flow_flow
+    resolved = {
+        CONF_MOTION_SENSORS: [
+            "binary_sensor.motion_auto",
+            "binary_sensor.motion_explicit",
+        ],
+        CONF_AUTO_ADDED_SENSORS: {CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"]},
+    }
+
+    explicit = _explicit_sensor_config(resolved, (CONF_MOTION_SENSORS,))
+    assert explicit[CONF_MOTION_SENSORS] == ["binary_sensor.motion_explicit"]
+    assert (
+        _auto_added_sensor_text(flow.hass, resolved, (CONF_MOTION_SENSORS,)).find(
+            "binary_sensor.motion_auto"
+        )
+        >= 0
+    )
 
 
 def _register_area_with_motion(
@@ -3649,22 +3772,32 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
     assert flow._area_config_draft[CONF_AUTO_DISCOVER_DOMAINS] == without_power
     assert flow._area_config_draft[CONF_EXCLUDED_INTEGRATIONS] == ["magic_areas"]
 
-    motion_marker = next(
-        key for key in next_res["data_schema"].schema if str(key) == CONF_MOTION_SENSORS
+    motion_auto_section = next(
+        value
+        for key, value in next_res["data_schema"].schema.items()
+        if str(key) == AUTO_ADDED_SECTION
     )
-    assert motion_marker.description == {"suggested_value": [pir.entity_id]}
+    motion_auto_marker = next(
+        key
+        for key in motion_auto_section.schema.schema
+        if str(key) == AUTO_ADDED_ENTITIES_FIELD
+    )
+    assert pir.entity_id in motion_auto_marker.description["suggested_value"]
 
     sensors_res = await flow.async_step_area_motion(
-        {CONF_MOTION_SENSORS: [pir.entity_id]}
+        {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
     )
     assert sensors_res["type"] == FlowResultType.FORM
     assert sensors_res["step_id"] == "area_sensors"
 
-    power_section = next(
-        key for key in sensors_res["data_schema"].schema if str(key) == "power"
+    explicit_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == EXPLICIT_SECTION
     )
-    power_inner = sensors_res["data_schema"].schema[power_section].schema.schema
-    power_marker = next(key for key in power_inner if str(key) == CONF_POWER_SENSORS)
+    power_marker = next(
+        key for key in explicit_section.schema.schema if str(key) == CONF_POWER_SENSORS
+    )
     assert (
         power_marker.description is None
         or "suggested_value" not in power_marker.description
@@ -3673,7 +3806,7 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
     with patch.object(
         flow, "async_step_area_behavior", new_callable=AsyncMock
     ) as behavior_step:
-        await flow.async_step_area_sensors({"power": {CONF_POWER_SENSORS: []}})
+        await flow.async_step_area_sensors({EXPLICIT_SECTION: {CONF_POWER_SENSORS: []}})
 
     behavior_step.assert_awaited_once()
     assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
@@ -3789,20 +3922,34 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
         }
     )
     sensors_res = await flow.async_step_area_motion(
-        {CONF_MOTION_SENSORS: [pir.entity_id]}
+        {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
     )
-    power_section = next(
-        key for key in sensors_res["data_schema"].schema if str(key) == "power"
+    auto_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == AUTO_ADDED_SECTION
     )
-    power_inner = sensors_res["data_schema"].schema[power_section].schema.schema
-    power_marker = next(key for key in power_inner if str(key) == CONF_POWER_SENSORS)
-    assert power_marker.description == {"suggested_value": [desk_power.entity_id]}
+    auto_marker = next(
+        key
+        for key in auto_section.schema.schema
+        if str(key) == AUTO_ADDED_ENTITIES_FIELD
+    )
+    assert desk_power.entity_id in auto_marker.description["suggested_value"]
+    explicit_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == EXPLICIT_SECTION
+    )
+    power_marker = next(
+        key for key in explicit_section.schema.schema if str(key) == CONF_POWER_SENSORS
+    )
+    assert power_marker.description is None
 
     with patch.object(
         flow, "async_step_area_behavior", new_callable=AsyncMock
     ) as behavior_step:
         await flow.async_step_area_sensors(
-            {"power": {CONF_POWER_SENSORS: [desk_power.entity_id]}}
+            {EXPLICIT_SECTION: {CONF_POWER_SENSORS: [desk_power.entity_id]}}
         )
 
     behavior_step.assert_awaited_once()

@@ -68,7 +68,7 @@ Person tracking never does either of these, only the away mode entity. Don't dri
 
 ### Step 2: Motion Sensors
 
-Configure motion and presence sensors for the area. At least one motion sensor is required, either discovered automatically or selected here. The sensor pickers store manual additions; automatic sensors do not need to be selected again. You can also adjust:
+Configure motion and presence sensors for the area. At least one motion sensor is required, either discovered automatically or selected here. The form separates **Auto-added (read-only)** sensors from **Explicitly selected** sensors. Automatic sensors are listed but cannot be changed in the form; use the discovery settings or exclusions in Area Basics to remove them. Use the editable explicit selector for manual additions.
 
 - **Motion Weight**: How much influence motion sensors have on the calculation
 - **Motion Timeout**: Additional timeout applied to historical motion data (configured using a duration picker)
@@ -77,7 +77,7 @@ Configure motion and presence sensors for the area. At least one motion sensor i
 
 ![One page per kind of sensor](../images/config_area_sensors_menu.png)
 
-Configure optional sensors grouped into collapsible sections. You only need to add [sensors](../features/sensors.md) that are relevant to the area:
+Configure optional sensors in the **Explicitly selected** section. The form separates these editable selectors from the **Auto-added (read-only)** list. Automatic sensors cannot be changed in the form; use the discovery settings or exclusions in Area Basics to remove them. Choose only [sensors](../features/sensors.md) that are relevant to the area:
 
 - **Windows, Doors & Covers**: Door sensors, window sensors, cover entities with active state configuration
 - **Media Players**: Media devices with active state selection
