@@ -30,6 +30,7 @@ from custom_components.area_occupancy.config_flow import (
     _find_area_by_sanitized_id,
     _format_seconds,
     _get_area_summary_info,
+    _get_excluded_integration_options,
     _get_include_entities,
     _get_purpose_display_name,
     _get_state_select_options,
@@ -3673,6 +3674,19 @@ async def test_discovery_confirm_persists_domain_filter_and_excluded_integration
     saved = result["subentries"][0]["data"]
     assert saved[CONF_AUTO_DISCOVER_DOMAINS] == [CONF_MOTION_SENSORS]
     assert saved[CONF_EXCLUDED_INTEGRATIONS] == ["powercalc"]
+
+
+def test_excluded_integration_options_have_readable_labels() -> None:
+    """Keep internal integration IDs out of the visible selector labels."""
+    options = _get_excluded_integration_options(
+        None,
+        {CONF_EXCLUDED_INTEGRATIONS: ["magic_areas:light", "powercalc"]},
+    )
+
+    assert {option["value"]: option["label"] for option in options} == {
+        "magic_areas:light": "Magic Areas — Light",
+        "powercalc": "Powercalc",
+    }
 
 
 async def test_basics_step_exclude_light_power_and_source_domain_options(

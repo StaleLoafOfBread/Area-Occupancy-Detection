@@ -383,9 +383,9 @@ def _get_excluded_integration_options(
             or base_platform.replace("_", " ").title()
         )
         label = (
-            f"{name} — {source_domain.replace('_', ' ').title()} ({platform})"
+            f"{name} — {source_domain.replace('_', ' ').title()}"
             if source_domain
-            else f"{name} ({platform})"
+            else name
         )
         options.append(SelectOptionDict(value=platform, label=label))
     return options
