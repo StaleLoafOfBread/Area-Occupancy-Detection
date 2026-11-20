@@ -43,7 +43,11 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow, section
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import area_registry as ar, entity_registry as er
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.selector import (
     AreaSelector,
     AreaSelectorConfig,
@@ -115,6 +119,7 @@ from .const import (
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
@@ -181,6 +186,7 @@ from .const import (
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
     DEFAULT_EXCLUDE_LIGHT_POWER,
+    DEFAULT_EXCLUDED_DEVICE_MATCHES,
     DEFAULT_EXPAND_GROUPS,
     DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
     DEFAULT_HEALTH_ENABLED,
@@ -229,6 +235,7 @@ from .discovery import (
     build_suggested_area_config,
     discover_area_sensors,
     discover_eligible_areas,
+    excluded_device_entity_ids,
     get_enabled_discovery_domains,
     is_weather_entity,
     resolve_area_sensors,
@@ -395,6 +402,28 @@ def _get_excluded_integration_options(
         )
         options.append(SelectOptionDict(value=platform, label=label))
     return options
+
+
+def _get_excluded_device_match_options(
+    hass: HomeAssistant | None,
+    current: dict[str, Any] | None = None,
+) -> list[SelectOptionDict]:
+    """Return registered device manufacturers and models for matching."""
+    matches: set[str] = set()
+    if hass is not None:
+        with contextlib.suppress(AttributeError, KeyError, RuntimeError, TypeError):
+            for device in dr.async_get(hass).devices.values():
+                for value in (device.manufacturer, device.model):
+                    if isinstance(value, str) and value.strip():
+                        matches.add(value.strip())
+    for match in (current or {}).get(CONF_EXCLUDED_DEVICE_MATCHES) or []:
+        if isinstance(match, str) and match.strip():
+            matches.add(match.strip())
+
+    return [
+        SelectOptionDict(value=match, label=match)
+        for match in sorted(matches, key=str.casefold)
+    ]
 
 
 def _format_seconds(seconds: float) -> str:
@@ -1312,6 +1341,24 @@ def _create_basics_step_schema(
     ] = BooleanSelector()
     fields[
         vol.Optional(
+            CONF_EXCLUDED_DEVICE_MATCHES,
+            default=list(
+                current.get(
+                    CONF_EXCLUDED_DEVICE_MATCHES, DEFAULT_EXCLUDED_DEVICE_MATCHES
+                )
+                or []
+            ),
+        )
+    ] = SelectSelector(
+        SelectSelectorConfig(
+            options=_get_excluded_device_match_options(hass, current),
+            multiple=True,
+            custom_value=True,
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+    fields[
+        vol.Optional(
             CONF_EXCLUDED_SENSORS,
             default=current.get(CONF_EXCLUDED_SENSORS, []),
         )
@@ -1774,6 +1821,17 @@ def _sync_discovered_and_excluded(
                 ]
 
     discovered: dict[str, list[str]] = {}
+    global_options = global_options or {}
+    excluded_device_matches = [
+        *(draft.get(CONF_EXCLUDED_DEVICE_MATCHES) or DEFAULT_EXCLUDED_DEVICE_MATCHES),
+        *(
+            global_options.get(CONF_EXCLUDED_DEVICE_MATCHES)
+            or DEFAULT_EXCLUDED_DEVICE_MATCHES
+        ),
+    ]
+    excluded_devices = (
+        excluded_device_entity_ids(hass, excluded_device_matches) if hass else set()
+    )
     if (
         hass
         and draft.get(CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS)
@@ -1790,9 +1848,10 @@ def _sync_discovered_and_excluded(
                 exclude_light_power=draft.get(
                     CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
                 ),
+                excluded_device_matches=excluded_device_matches,
                 excluded_entities=[
                     *(draft.get(CONF_EXCLUDED_SENSORS) or []),
-                    *((global_options or {}).get(CONF_EXCLUDED_SENSORS) or []),
+                    *(global_options.get(CONF_EXCLUDED_SENSORS) or []),
                 ],
                 global_options=global_options,
             )
@@ -1815,6 +1874,8 @@ def _sync_discovered_and_excluded(
         for entity_id in chosen:
             if entity_id in excluded:
                 excluded.remove(entity_id)
+            if entity_id in excluded_devices:
+                continue
             if entity_id in previous_explicit or entity_id not in eligible:
                 explicit_ids.append(entity_id)
 
@@ -2207,6 +2268,23 @@ def _create_global_settings_schema(
                     CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
                 ),
             ): BooleanSelector(),
+            vol.Optional(
+                CONF_EXCLUDED_DEVICE_MATCHES,
+                default=list(
+                    defaults.get(
+                        CONF_EXCLUDED_DEVICE_MATCHES,
+                        DEFAULT_EXCLUDED_DEVICE_MATCHES,
+                    )
+                    or []
+                ),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=_get_excluded_device_match_options(hass, defaults),
+                    multiple=True,
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Optional(
                 CONF_EXCLUDED_SENSORS,
                 default=list(defaults.get(CONF_EXCLUDED_SENSORS) or []),
@@ -2714,6 +2792,7 @@ class BaseOccupancyFlow:
                     CONF_AUTO_DISCOVER_SENSORS,
                     CONF_EXPAND_GROUPS,
                     CONF_EXCLUDE_LIGHT_POWER,
+                    CONF_EXCLUDED_DEVICE_MATCHES,
                     CONF_EXCLUDED_SENSORS,
                     CONF_EXCLUDED_INTEGRATIONS,
                 },
@@ -3911,6 +3990,9 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
             ),
             CONF_EXCLUDE_LIGHT_POWER: self.config_entry.options.get(
                 CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+            ),
+            CONF_EXCLUDED_DEVICE_MATCHES: self.config_entry.options.get(
+                CONF_EXCLUDED_DEVICE_MATCHES, DEFAULT_EXCLUDED_DEVICE_MATCHES
             ),
             CONF_EXCLUDED_SENSORS: self.config_entry.options.get(
                 CONF_EXCLUDED_SENSORS, []

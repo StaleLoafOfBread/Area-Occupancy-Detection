@@ -74,6 +74,7 @@ from custom_components.area_occupancy.const import (
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
@@ -1566,6 +1567,7 @@ class TestGlobalSettingsAwayModeEntity:
         result = _create_global_settings_schema({})(GLOBAL_SETTINGS_INPUT)
 
         assert CONF_AWAY_MODE_ENTITY not in result
+        assert result[CONF_EXCLUDED_DEVICE_MATCHES] == []
 
 
 class TestAreaOccupancyOptionsFlow:
@@ -1656,6 +1658,7 @@ class TestAreaOccupancyOptionsFlow:
         flow.config_entry = config_flow_mock_config_entry_with_areas
         user_input = {
             **GLOBAL_SETTINGS_INPUT,
+            CONF_EXCLUDED_DEVICE_MATCHES: ["ratgdo"],
             CONF_EXCLUDE_LIGHT_POWER: True,
             CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
             CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
@@ -1665,6 +1668,7 @@ class TestAreaOccupancyOptionsFlow:
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is True
+        assert result["data"][CONF_EXCLUDED_DEVICE_MATCHES] == ["ratgdo"]
         assert result["data"][CONF_EXCLUDED_SENSORS] == ["sensor.garage_power"]
         assert result["data"][CONF_EXCLUDED_INTEGRATIONS] == ["powercalc:light"]
 
@@ -3286,6 +3290,40 @@ def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
     }
 
 
+def test_sync_drops_explicit_device_matches_when_excluded() -> None:
+    """Configured device text matches also block explicit sensor selections."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_EXCLUDED_DEVICE_MATCHES: ["ratgdo"],
+    }
+
+    with (
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value={},
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.excluded_device_entity_ids",
+            return_value={"binary_sensor.garage_motion"},
+        ),
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            {
+                CONF_MOTION_SENSORS: [
+                    "binary_sensor.garage_motion",
+                    "binary_sensor.room_motion",
+                ]
+            },
+            (CONF_MOTION_SENSORS,),
+        )
+
+    assert synced[CONF_MOTION_SENSORS] == ["binary_sensor.room_motion"]
+
+
 async def test_sensors_step_separates_readonly_discovery_from_explicit_selection(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
@@ -3731,6 +3769,10 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
     schema = basics_form["data_schema"].schema
     assert SECTION_AUTO_DISCOVERY_TYPES in schema
     assert CONF_EXCLUDED_INTEGRATIONS in schema
+    excluded_device_matches_marker = next(
+        key for key in schema if str(key) == CONF_EXCLUDED_DEVICE_MATCHES
+    )
+    assert excluded_device_matches_marker.default() == []
 
     excluded_int_marker = next(
         key for key in schema if str(key) == CONF_EXCLUDED_INTEGRATIONS
@@ -3755,6 +3797,7 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
             CONF_AREA_ID: office.id,
             CONF_PURPOSE: "work",
             CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_DEVICE_MATCHES: ["ratgdo"],
             SECTION_AUTO_DISCOVERY_TYPES: {
                 CONF_AUTO_DISCOVER_DOMAINS: without_power,
             },
@@ -3766,6 +3809,7 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
     assert next_res["step_id"] == "area_motion"
     assert flow._area_config_draft[CONF_AUTO_DISCOVER_DOMAINS] == without_power
     assert flow._area_config_draft[CONF_EXCLUDED_INTEGRATIONS] == ["magic_areas"]
+    assert flow._area_config_draft[CONF_EXCLUDED_DEVICE_MATCHES] == ["ratgdo"]
 
     motion_auto_section = next(
         value
@@ -3826,6 +3870,7 @@ async def test_discovery_confirm_persists_domain_filter_and_excluded_integration
         {
             CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
             CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_DEVICE_MATCHES: ["ratgdo"],
             SECTION_AUTO_DISCOVERY_TYPES: {
                 CONF_AUTO_DISCOVER_DOMAINS: [CONF_MOTION_SENSORS],
             },
@@ -3837,6 +3882,7 @@ async def test_discovery_confirm_persists_domain_filter_and_excluded_integration
     saved = result["subentries"][0]["data"]
     assert saved[CONF_AUTO_DISCOVER_DOMAINS] == [CONF_MOTION_SENSORS]
     assert saved[CONF_EXCLUDED_INTEGRATIONS] == ["powercalc"]
+    assert saved[CONF_EXCLUDED_DEVICE_MATCHES] == ["ratgdo"]
 
 
 def test_excluded_integration_options_have_readable_labels() -> None:

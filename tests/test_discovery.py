@@ -15,6 +15,7 @@ from custom_components.area_occupancy.const import (
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
@@ -63,7 +64,12 @@ def entity(entity_id: str, **kwargs: object) -> SimpleNamespace:
     )
 
 
-def resolve(data: dict[str, Any], *entries: SimpleNamespace) -> dict[str, Any]:
+def resolve(
+    data: dict[str, Any],
+    *entries: SimpleNamespace,
+    device_entries: dict[str, SimpleNamespace] | None = None,
+    global_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Resolve against a device in room, with no live states required."""
     hass = Mock()
     hass.states.get.return_value = None
@@ -72,8 +78,10 @@ def resolve(data: dict[str, Any], *entries: SimpleNamespace) -> dict[str, Any]:
         patch("custom_components.area_occupancy.discovery.dr.async_get") as devices,
     ):
         registry.return_value.entities = {e.entity_id: e for e in entries}
-        devices.return_value.async_get.return_value = SimpleNamespace(area_id="room")
-        return resolve_area_sensors(hass, data)
+        devices.return_value.async_get.side_effect = lambda device_id: (
+            device_entries or {}
+        ).get(device_id, SimpleNamespace(area_id="room"))
+        return resolve_area_sensors(hass, data, global_options)
 
 
 def test_discovery_enabled_by_default() -> None:
@@ -422,6 +430,75 @@ def test_exclusions_apply_even_when_discovery_disabled() -> None:
     }
     result = resolve(data, entity("binary_sensor.new", device_class="motion"))
     assert result["motion_sensors"] == ["binary_sensor.kept"]
+
+
+@pytest.mark.parametrize(
+    ("manufacturer", "model", "match"),
+    [
+        ("RATGDO", "V32 disco SecPlus V1", "ratgdo"),
+        ("LiftMaster", "v32disco_secplusv1", "secplusv1"),
+    ],
+)
+def test_area_device_match_exclusion_removes_saved_and_discovered_entities(
+    manufacturer: str, model: str, match: str
+) -> None:
+    """Area-level text matches filter device metadata case-insensitively."""
+    data = {
+        CONF_AREA_ID: "room",
+        CONF_EXCLUDED_DEVICE_MATCHES: [match],
+        "cover_sensors": ["cover.garage_door"],
+    }
+    ratgdo = entity(
+        "cover.garage_door",
+        platform="esphome",
+        device_id="ratgdo",
+    )
+    ratgdo_auto = entity(
+        "cover.garage_door_auto",
+        platform="esphome",
+        device_id="ratgdo",
+    )
+    unrelated = entity("cover.storage_door", device_id="other")
+
+    result = resolve(
+        data,
+        ratgdo,
+        ratgdo_auto,
+        unrelated,
+        device_entries={
+            "ratgdo": SimpleNamespace(
+                area_id="room",
+                manufacturer=manufacturer,
+                model=model,
+                identifiers=set(),
+            )
+        },
+    )
+
+    assert result["cover_sensors"] == ["cover.storage_door"]
+
+
+def test_global_device_match_exclusion_removes_saved_entities() -> None:
+    """Global manufacturer/model matches override manually selected sensors."""
+    result = resolve(
+        {
+            CONF_AREA_ID: "room",
+            "cover_sensors": ["cover.garage_door", "cover.storage_door"],
+        },
+        entity("cover.garage_door", device_id="ratgdo"),
+        entity("cover.storage_door", device_id="other"),
+        device_entries={
+            "ratgdo": SimpleNamespace(
+                area_id="room",
+                manufacturer="LiftMaster",
+                model="v32disco_secplusv1",
+                identifiers=set(),
+            )
+        },
+        global_options={CONF_EXCLUDED_DEVICE_MATCHES: ["secplus"]},
+    )
+
+    assert result["cover_sensors"] == ["cover.storage_door"]
 
 
 def test_ambiguous_types_are_not_guessed() -> None:

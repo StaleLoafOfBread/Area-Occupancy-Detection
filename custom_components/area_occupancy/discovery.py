@@ -38,6 +38,7 @@ from .const import (
     CONF_DECAY_HALF_LIFE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
@@ -59,6 +60,7 @@ from .const import (
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_LIGHT_POWER,
+    DEFAULT_EXCLUDED_DEVICE_MATCHES,
     DEFAULT_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -262,6 +264,46 @@ def _normalize_excluded_platforms(
     return {p.lower() for p in excluded_platforms if isinstance(p, str) and p}
 
 
+def excluded_device_entity_ids(
+    hass: HomeAssistant, matches: Collection[str] | None
+) -> set[str]:
+    """Return entity IDs whose device manufacturer or model matches a filter."""
+    normalized_matches = {
+        match.strip().casefold()
+        for match in (matches or ())
+        if isinstance(match, str) and match.strip()
+    }
+    if not normalized_matches:
+        return set()
+
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    excluded_ids: set[str] = set()
+    checked_devices: dict[str, bool] = {}
+
+    for entry in registry.entities.values():
+        if not entry.device_id:
+            continue
+        is_excluded = checked_devices.get(entry.device_id)
+        if is_excluded is None:
+            device = devices.async_get(entry.device_id)
+            manufacturer = getattr(device, "manufacturer", None)
+            model = getattr(device, "model", None)
+            metadata = [
+                value.casefold()
+                for value in (manufacturer, model)
+                if isinstance(value, str)
+            ]
+            is_excluded = any(
+                match in value for match in normalized_matches for value in metadata
+            )
+            checked_devices[entry.device_id] = is_excluded
+        if is_excluded:
+            excluded_ids.add(entry.entity_id)
+
+    return excluded_ids
+
+
 def _source_domain_from_attrs(attrs: Mapping[str, Any] | None) -> str | None:
     """Return the source entity domain exposed in state attributes, if any."""
     if not isinstance(attrs, Mapping):
@@ -426,6 +468,7 @@ def discover_area_sensors(
     enabled_domains: Collection[str] | None = None,
     excluded_platforms: Collection[str] | None = None,
     exclude_light_power: bool = DEFAULT_EXCLUDE_LIGHT_POWER,
+    excluded_device_matches: Collection[str] | None = None,
     excluded_entities: Collection[str] | None = None,
     global_options: Mapping[str, Any] | None = None,
 ) -> dict[str, list[str]]:
@@ -437,7 +480,8 @@ def discover_area_sensors(
     ``enabled_domains`` is given, only matching sensor config keys are returned.
     When ``exclude_light_power`` is enabled, light-backed power sensors (such as
     Powercalc light sensors) are skipped. Global exclusions are combined with
-    the supplied area-specific exclusions.
+    the supplied area-specific exclusions. Device exclusions match
+    case-insensitive fragments in the device manufacturer or model.
     """
     allowed_domains = set(enabled_domains) if enabled_domains is not None else None
     if not area_id or (allowed_domains is not None and not allowed_domains):
@@ -459,6 +503,18 @@ def discover_area_sensors(
     exclude_light_power |= bool(global_options.get(CONF_EXCLUDE_LIGHT_POWER, False))
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
+    excluded_entity_ids.update(
+        excluded_device_entity_ids(
+            hass,
+            [
+                *(excluded_device_matches or ()),
+                *(
+                    global_options.get(CONF_EXCLUDED_DEVICE_MATCHES)
+                    or DEFAULT_EXCLUDED_DEVICE_MATCHES
+                ),
+            ],
+        )
+    )
     discovered: dict[str, list[str]] = {}
 
     for entry in sorted(registry.entities.values(), key=lambda item: item.entity_id):
@@ -539,8 +595,8 @@ def resolve_area_sensors(
 
     Auto-discovery and group expansion default to enabled unless explicitly
     set to ``False``. Area-specific and global entity exclusions strip matching
-    entities from every sensor list, including saved selections and expanded
-    group members.
+    entities and matching device entities are stripped from every sensor
+    list, including saved selections and expanded group members.
     """
     resolved = dict(data)
     expand_groups = data.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS)
@@ -573,6 +629,14 @@ def resolve_area_sensors(
 
     excluded = set(data.get(CONF_EXCLUDED_SENSORS) or [])
     excluded.update(global_options.get(CONF_EXCLUDED_SENSORS) or [])
+    excluded_device_matches = [
+        *(data.get(CONF_EXCLUDED_DEVICE_MATCHES) or DEFAULT_EXCLUDED_DEVICE_MATCHES),
+        *(
+            global_options.get(CONF_EXCLUDED_DEVICE_MATCHES)
+            or DEFAULT_EXCLUDED_DEVICE_MATCHES
+        ),
+    ]
+    excluded.update(excluded_device_entity_ids(hass, excluded_device_matches))
     if excluded:
         for key in ALL_AREA_SENSOR_KEYS:
             existing = resolved.get(key)
@@ -624,6 +688,7 @@ def resolve_area_sensors(
         exclude_light_power=data.get(
             CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
         ),
+        excluded_device_matches=excluded_device_matches,
         excluded_entities=excluded,
         global_options=global_options,
     )
