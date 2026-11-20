@@ -71,7 +71,7 @@ Person tracking never does either of these, only the away mode entity. Don't dri
 Configure motion and presence sensors for the area. At least one motion sensor is required, either discovered automatically or selected here. The form separates **Auto-added (read-only)** sensors from **Explicitly selected** sensors. Automatic sensors are listed but cannot be changed in the form; use the discovery settings or exclusions in Area Basics to remove them. Use the editable explicit selector for manual additions.
 
 - **Motion Weight**: How much influence motion sensors have on the calculation
-- **Motion Timeout**: Additional timeout applied to historical motion data (configured using a duration picker)
+- **Motion Timeout**: How long a PIR-style motion sensor keeps counting in full after it turns off, before the area starts to clear (default 90 seconds). The same time is learned as occupied. Sensors that hold "on" while someone is there, such as most mmWave sensors, are not extended; each sensor's own history decides which kind it is.
 
 ### Step 3: Additional Sensors
 
