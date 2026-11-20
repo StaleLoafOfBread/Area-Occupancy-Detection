@@ -174,6 +174,7 @@ CONF_WEIGHT_WASP: Final = "weight_wasp"
 # Default values
 DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
 DEFAULT_EXCLUDE_LIGHT_POWER: Final[bool] = True
+DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER: Final[bool] = False
 DEFAULT_EXPAND_GROUPS: Final[bool] = True
 DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0

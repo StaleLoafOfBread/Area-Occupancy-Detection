@@ -179,6 +179,7 @@ from .const import (
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
     DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXPAND_GROUPS,
+    DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
     DEFAULT_HEALTH_ENABLED,
     DEFAULT_MEDIA_ACTIVE_STATES,
     DEFAULT_MIN_PRIOR_OVERRIDE,
@@ -1728,6 +1729,7 @@ def _sync_discovered_and_excluded(
     draft: dict[str, Any],
     submitted: dict[str, Any],
     sensor_keys: tuple[str, ...],
+    global_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Sync form sensor selections with auto-discovered and excluded sensors."""
     updated = dict(submitted)
@@ -1750,6 +1752,11 @@ def _sync_discovered_and_excluded(
         exclude_light_power=draft.get(
             CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
         ),
+        excluded_entities=[
+            *(draft.get(CONF_EXCLUDED_SENSORS) or []),
+            *((global_options or {}).get(CONF_EXCLUDED_SENSORS) or []),
+        ],
+        global_options=global_options,
     )
     excluded: list[str] = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
     excluded_changed = False
@@ -1839,7 +1846,10 @@ def _find_area_by_sanitized_id(
 
 
 def _build_area_description_placeholders(
-    area_config: dict[str, Any], area_id: str, hass: HomeAssistant | None = None
+    area_config: dict[str, Any],
+    area_id: str,
+    hass: HomeAssistant | None = None,
+    global_options: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Build description placeholders for the area hub menus.
 
@@ -1850,13 +1860,14 @@ def _build_area_description_placeholders(
         area_config: Area configuration dictionary
         area_id: Area ID
         hass: Home Assistant instance (optional, for resolving area names)
+        global_options: Integration-wide discovery exclusions, when available
 
     Returns:
         Dictionary of placeholders for form/menu descriptions
     """
 
     if hass:
-        area_config = resolve_area_sensors(hass, area_config)
+        area_config = resolve_area_sensors(hass, area_config, global_options)
 
     def _name(some_area_id: str) -> str:
         if hass:
@@ -1973,13 +1984,16 @@ def _handle_step_error(err: Exception) -> str:
 
 
 def _create_area_selector_schema(
-    areas: list[dict[str, Any]], hass: HomeAssistant | None = None
+    areas: list[dict[str, Any]],
+    hass: HomeAssistant | None = None,
+    global_options: dict[str, Any] | None = None,
 ) -> vol.Schema:
     """Create schema for area selection step.
 
     Args:
         areas: List of configured areas
         hass: Home Assistant instance (optional, for resolving area names)
+        global_options: Integration-wide discovery exclusions, when available
 
     Returns:
         Schema with SelectSelector in LIST mode (radio buttons) for area selection
@@ -2021,7 +2035,7 @@ def _create_area_selector_schema(
             area_name = area_id
 
         summary = _get_area_summary_info(
-            resolve_area_sensors(hass, area) if hass else area
+            resolve_area_sensors(hass, area, global_options) if hass else area
         )
         # Use area_id for option value (sanitized)
         sanitized_id = area_id.replace(" ", "_").replace("/", "_")
@@ -2045,7 +2059,9 @@ def _create_area_selector_schema(
     )
 
 
-def _create_global_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _create_global_settings_schema(
+    defaults: dict[str, Any], hass: HomeAssistant | None = None
+) -> vol.Schema:
     """Create schema for global settings."""
     return vol.Schema(
         {
@@ -2075,6 +2091,27 @@ def _create_global_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
                 ),
                 vol.Coerce(int),
             ),
+            vol.Required(
+                CONF_EXCLUDE_LIGHT_POWER,
+                default=defaults.get(
+                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+                ),
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_EXCLUDED_SENSORS,
+                default=list(defaults.get(CONF_EXCLUDED_SENSORS) or []),
+            ): EntitySelector(EntitySelectorConfig(multiple=True)),
+            vol.Optional(
+                CONF_EXCLUDED_INTEGRATIONS,
+                default=list(defaults.get(CONF_EXCLUDED_INTEGRATIONS) or []),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=_get_excluded_integration_options(hass, defaults),
+                    multiple=True,
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
             # The current value is only suggested, not a default: a default
             # would refill the field whenever the user clears it.
             vol.Optional(
@@ -2093,6 +2130,19 @@ class BaseOccupancyFlow:
     This class provides shared validation logic used by both the config flow
     and options flow. It ensures consistent validation across both flows.
     """
+
+    def _get_global_discovery_settings(self) -> dict[str, Any]:
+        """Return saved integration-wide discovery exclusions, if configured."""
+        config_entry = getattr(self, "config_entry", None)
+        return dict(config_entry.options) if config_entry is not None else {}
+
+    def _resolve_area_sensors(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Resolve area sensors with integration-wide discovery exclusions."""
+        if not getattr(self, "hass", None):
+            return data
+        return resolve_area_sensors(
+            self.hass, data, self._get_global_discovery_settings()
+        )
 
     def _validate_duplicate_area_id(
         self,
@@ -2125,7 +2175,10 @@ class BaseOccupancyFlow:
         return errors
 
     def _validate_config(
-        self, data: dict[str, Any], hass: HomeAssistant | None = None
+        self,
+        data: dict[str, Any],
+        hass: HomeAssistant | None = None,
+        global_options: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Validate a flat area configuration and return per-field errors.
 
@@ -2137,13 +2190,25 @@ class BaseOccupancyFlow:
         Args:
             data: Flat (un-sectioned) area configuration
             hass: Home Assistant instance (for validating the area id)
+            global_options: Integration-wide discovery exclusions, when available
 
         Returns:
             Mapping of field key (or ``"base"``) to ``strings.json`` error key.
             Empty when validation passed.
         """
+        effective_global_options = (
+            self._get_global_discovery_settings()
+            if global_options is None
+            else global_options
+        )
         errors = validate_area_config(
-            resolve_area_sensors(hass, data) if hass else data
+            resolve_area_sensors(
+                hass,
+                data,
+                effective_global_options,
+            )
+            if hass
+            else data
         )
         area_id = data.get(CONF_AREA_ID, "")
         if area_id and hass and CONF_AREA_ID not in errors:
@@ -2231,7 +2296,9 @@ class BaseOccupancyFlow:
                 if a.get(CONF_AREA_ID)
             }
             eligible = discover_eligible_areas(
-                self.hass, excluded_area_ids=configured_ids
+                self.hass,
+                excluded_area_ids=configured_ids,
+                global_options=self._get_global_discovery_settings(),
             )
             self._area_config_draft = eligible[0] if eligible else {}
         else:
@@ -2404,7 +2471,10 @@ class BaseOccupancyFlow:
             menu_options=[f"edit_sensors_{group}" for group in SENSOR_GROUPS]
             + ["cancel_sensors_menu"],
             description_placeholders=_build_area_description_placeholders(
-                area_config, area_id, self.hass
+                area_config,
+                area_id,
+                self.hass,
+                self._get_global_discovery_settings(),
             ),
         )
 
@@ -2577,13 +2647,15 @@ class BaseOccupancyFlow:
         if user_input is not None:
             flattened = flatten_sectioned_input(user_input)
             flattened = _sync_discovered_and_excluded(
-                self.hass, self._area_config_draft, flattened, (CONF_MOTION_SENSORS,)
+                self.hass,
+                self._area_config_draft,
+                flattened,
+                (CONF_MOTION_SENSORS,),
+                self._get_global_discovery_settings(),
             )
 
             candidate = {**self._area_config_draft, **flattened}
-            effective = (
-                resolve_area_sensors(self.hass, candidate) if self.hass else candidate
-            )
+            effective = self._resolve_area_sensors(candidate)
             if not effective.get(CONF_MOTION_SENSORS):
                 errors["base"] = "motion_required"
 
@@ -2619,11 +2691,7 @@ class BaseOccupancyFlow:
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(base_schema, user_input)
         else:
-            resolved_draft = (
-                resolve_area_sensors(self.hass, self._area_config_draft)
-                if self.hass
-                else self._area_config_draft
-            )
+            resolved_draft = self._resolve_area_sensors(self._area_config_draft)
             suggested = _draft_to_suggested(resolved_draft, motion_keys)
             if suggested:
                 data_schema = self.add_suggested_values_to_schema(
@@ -2660,15 +2728,17 @@ class BaseOccupancyFlow:
         if user_input is not None:
             flattened = flatten_sectioned_input(user_input)
             flattened = _sync_discovered_and_excluded(
-                self.hass, self._area_config_draft, flattened, active_sensor_keys
+                self.hass,
+                self._area_config_draft,
+                flattened,
+                active_sensor_keys,
+                self._get_global_discovery_settings(),
             )
 
             # Validate here, while the fields are on screen: a sensor-state
             # error raised on a later step has no field to show against.
             candidate = {**self._area_config_draft, **flattened}
-            effective = (
-                resolve_area_sensors(self.hass, candidate) if self.hass else candidate
-            )
+            effective = self._resolve_area_sensors(candidate)
             errors.update(validate_sensor_states(effective))
 
             if not errors:
@@ -2687,11 +2757,7 @@ class BaseOccupancyFlow:
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(base_schema, user_input)
         elif self._area_config_draft:
-            resolved_draft = (
-                resolve_area_sensors(self.hass, self._area_config_draft)
-                if self.hass
-                else self._area_config_draft
-            )
+            resolved_draft = self._resolve_area_sensors(self._area_config_draft)
             nested = _nest_config_for_sections(resolved_draft)
             suggested = {k: v for k, v in nested.items() if k in groups}
             if suggested:
@@ -2899,7 +2965,10 @@ class AreaSubentryFlowHandler(ConfigSubentryFlow, BaseOccupancyFlow):
             step_id="area_action",
             menu_options=[*AREA_EDIT_SPOKES, "edit_area"],
             description_placeholders=_build_area_description_placeholders(
-                area_data, str(area_id), self.hass
+                area_data,
+                str(area_id),
+                self.hass,
+                self._get_global_discovery_settings(),
             ),
         )
 
@@ -3018,7 +3087,11 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="manage_areas",
-            data_schema=_create_area_selector_schema(self._areas, hass=self.hass),
+            data_schema=_create_area_selector_schema(
+                self._areas,
+                hass=self.hass,
+                global_options=self._get_global_discovery_settings(),
+            ),
             errors=errors,
         )
 
@@ -3118,7 +3191,10 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
             return await self.async_step_user()
 
         description_placeholders = _build_area_description_placeholders(
-            area_config, area_id, self.hass
+            area_config,
+            area_id,
+            self.hass,
+            self._get_global_discovery_settings(),
         )
 
         return self.async_show_menu(
@@ -3209,7 +3285,11 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         if active_entry and find_area_subentry_id(active_entry, area_id) is not None:
             return self.async_abort(reason="area_already_configured")
 
-        discovered = discover_area_sensors(self.hass, area_id)
+        discovered = discover_area_sensors(
+            self.hass,
+            area_id,
+            global_options=active_entry.options if active_entry else None,
+        )
         if not discovered.get(CONF_MOTION_SENSORS):
             return self.async_abort(reason="motion_required")
 
@@ -3234,7 +3314,10 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         if active_entry and find_area_subentry_id(active_entry, area_id) is not None:
             return self.async_abort(reason="area_already_configured")
 
-        discovered = discover_area_sensors(self.hass, area_id)
+        global_options = active_entry.options if active_entry else None
+        discovered = discover_area_sensors(
+            self.hass, area_id, global_options=global_options
+        )
         suggested_config = build_suggested_area_config(self.hass, area_id, area_name)
         adjacent_options = (
             self._build_adjacent_area_options(
@@ -3254,7 +3337,7 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
                 CONF_AREA_ID: area_id,
             }
             apply_purpose_based_decay_default(candidate, candidate.get(CONF_PURPOSE))
-            errors.update(self._validate_config(candidate, self.hass))
+            errors.update(self._validate_config(candidate, self.hass, global_options))
 
             if not errors:
                 if active_entry is not None:
@@ -3431,7 +3514,11 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
 
         return self.async_show_form(
             step_id="manage_areas",
-            data_schema=_create_area_selector_schema(areas, hass=self.hass),
+            data_schema=_create_area_selector_schema(
+                areas,
+                hass=self.hass,
+                global_options=self._get_global_discovery_settings(),
+            ),
             errors=errors,
         )
 
@@ -3449,7 +3536,10 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
             return await self.async_step_init()
 
         description_placeholders = _build_area_description_placeholders(
-            area_config, area_id, self.hass
+            area_config,
+            area_id,
+            self.hass,
+            self._get_global_discovery_settings(),
         )
 
         return self.async_show_menu(
@@ -3635,7 +3725,9 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
         """Manage global settings."""
         if user_input is not None:
             # Validate and coerce using the schema
-            schema = _create_global_settings_schema(self.config_entry.options)
+            schema = _create_global_settings_schema(
+                self.config_entry.options, self.hass
+            )
             user_input = schema(user_input)
 
             # Update the config entry options directly
@@ -3662,12 +3754,21 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
             CONF_SENSOR_PRECISION: self.config_entry.options.get(
                 CONF_SENSOR_PRECISION, DEFAULT_SENSOR_PRECISION
             ),
+            CONF_EXCLUDE_LIGHT_POWER: self.config_entry.options.get(
+                CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+            ),
+            CONF_EXCLUDED_SENSORS: self.config_entry.options.get(
+                CONF_EXCLUDED_SENSORS, []
+            ),
+            CONF_EXCLUDED_INTEGRATIONS: self.config_entry.options.get(
+                CONF_EXCLUDED_INTEGRATIONS, []
+            ),
             CONF_AWAY_MODE_ENTITY: self.config_entry.options.get(CONF_AWAY_MODE_ENTITY),
         }
 
         return self.async_show_form(
             step_id="global_settings",
-            data_schema=_create_global_settings_schema(defaults),
+            data_schema=_create_global_settings_schema(defaults, self.hass),
         )
 
     def _get_person_display_name(self, person_entity: str) -> str:

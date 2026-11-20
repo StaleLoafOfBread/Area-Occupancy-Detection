@@ -20,6 +20,7 @@ from custom_components.area_occupancy.const import (
     CONF_CO_SENSORS,
     CONF_DECAY_HALF_LIFE,
     CONF_DOOR_SENSORS,
+    CONF_EXCLUDED_SENSORS,
     CONF_LOCK_ACTIVE_STATE,
     CONF_LOCK_SENSORS,
     CONF_MEDIA_DEVICES,
@@ -1411,11 +1412,13 @@ def test_area_config_uses_discovery_without_persisting_results(
 ) -> None:
     area_name = coordinator.get_area_names()[0]
     data = {CONF_AREA_ID: setup_area_registry[area_name], CONF_MOTION_SENSORS: []}
+    global_options = {CONF_EXCLUDED_SENSORS: ["binary_sensor.blocked"]}
+    coordinator.config_entry.options = global_options
     with patch(
         "custom_components.area_occupancy.data.config.resolve_area_sensors",
         return_value={**data, CONF_MOTION_SENSORS: ["binary_sensor.discovered"]},
     ) as discovery:
         config = AreaConfig(coordinator, area_name=area_name, area_data=data)
-    discovery.assert_called_once_with(coordinator.hass, data)
+    discovery.assert_called_once_with(coordinator.hass, data, global_options)
     assert config.sensors.motion == ["binary_sensor.discovered"]
     assert data[CONF_MOTION_SENSORS] == []

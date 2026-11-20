@@ -988,6 +988,22 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
                 CONF_EXCLUDED_INTEGRATIONS: ["powercalc:vacuum"],
             },
         )
+        global_exclusions_res = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_POWER_SENSORS: [
+                    "sensor.rosey_power",
+                    "sensor.desk_plug_power",
+                ],
+            },
+            {
+                CONF_EXCLUDE_LIGHT_POWER: True,
+                CONF_EXCLUDED_SENSORS: ["sensor.desk_plug_power"],
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc:vacuum"],
+            },
+        )
 
     assert default_res[CONF_POWER_SENSORS] == [
         "sensor.desk_plug_power",
@@ -1004,3 +1020,4 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
         "sensor.desk_plug_power",
         "sensor.office_ceiling_power",
     ]
+    assert global_exclusions_res[CONF_POWER_SENSORS] == ["sensor.rosey_power"]

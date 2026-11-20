@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -424,6 +424,8 @@ def discover_area_sensors(
     enabled_domains: Collection[str] | None = None,
     excluded_platforms: Collection[str] | None = None,
     exclude_light_power: bool = DEFAULT_EXCLUDE_LIGHT_POWER,
+    excluded_entities: Collection[str] | None = None,
+    global_options: Mapping[str, Any] | None = None,
 ) -> dict[str, list[str]]:
     """Return eligible discoverable entities grouped by sensor config key for an area.
 
@@ -432,13 +434,27 @@ def discover_area_sensors(
     group entities are replaced by their domain-filtered member entities. When
     ``enabled_domains`` is given, only matching sensor config keys are returned.
     When ``exclude_light_power`` is enabled, light-backed power sensors (such as
-    Powercalc light sensors) are skipped.
+    Powercalc light sensors) are skipped. Global exclusions are combined with
+    the supplied area-specific exclusions.
     """
     allowed_domains = set(enabled_domains) if enabled_domains is not None else None
     if not area_id or (allowed_domains is not None and not allowed_domains):
         return {}
 
+    global_options = global_options or {}
     excluded_set = _normalize_excluded_platforms(excluded_platforms)
+    excluded_set.update(
+        _normalize_excluded_platforms(global_options.get(CONF_EXCLUDED_INTEGRATIONS))
+    )
+    excluded_entity_ids = {
+        entity_id
+        for entity_id in (
+            *(excluded_entities or ()),
+            *(global_options.get(CONF_EXCLUDED_SENSORS) or ()),
+        )
+        if isinstance(entity_id, str)
+    }
+    exclude_light_power |= bool(global_options.get(CONF_EXCLUDE_LIGHT_POWER, False))
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
     discovered: dict[str, list[str]] = {}
@@ -479,8 +495,10 @@ def discover_area_sensors(
                     excluded_platforms=excluded_set,
                     exclude_light_power=exclude_light_power,
                 )
-                if key is not None and (
-                    allowed_domains is None or key in allowed_domains
+                if (
+                    key is not None
+                    and (allowed_domains is None or key in allowed_domains)
+                    and member_id not in excluded_entity_ids
                 ):
                     target = discovered.setdefault(key, [])
                     if member_id not in target:
@@ -498,7 +516,11 @@ def discover_area_sensors(
             excluded_platforms=excluded_set,
             exclude_light_power=exclude_light_power,
         )
-        if key is not None and (allowed_domains is None or key in allowed_domains):
+        if (
+            key is not None
+            and (allowed_domains is None or key in allowed_domains)
+            and entry.entity_id not in excluded_entity_ids
+        ):
             target = discovered.setdefault(key, [])
             if entry.entity_id not in target:
                 target.append(entry.entity_id)
@@ -506,13 +528,17 @@ def discover_area_sensors(
     return discovered
 
 
-def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
+def resolve_area_sensors(
+    hass: HomeAssistant,
+    data: dict[str, Any],
+    global_options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Merge discovered inputs into a copy of the area's manual selections.
 
     Auto-discovery and group expansion default to enabled unless explicitly
-    set to ``False``. Exclusions always strip matching entities from every
-    sensor list (including previously saved manual selections and expanded
-    group members).
+    set to ``False``. Area-specific and global entity exclusions strip matching
+    entities from every sensor list, including saved selections and expanded
+    group members.
     """
     resolved = dict(data)
     expand_groups = data.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS)
@@ -533,7 +559,9 @@ def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                         expanded.append(entity_id)
                 resolved[key] = list(dict.fromkeys(expanded))
 
+    global_options = global_options or {}
     excluded = set(data.get(CONF_EXCLUDED_SENSORS) or [])
+    excluded.update(global_options.get(CONF_EXCLUDED_SENSORS) or [])
     if excluded:
         for key in ALL_AREA_SENSOR_KEYS:
             existing = resolved.get(key)
@@ -563,6 +591,8 @@ def resolve_area_sensors(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         exclude_light_power=data.get(
             CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
         ),
+        excluded_entities=excluded,
+        global_options=global_options,
     )
     for key, entity_ids in discovered.items():
         additions = [
@@ -601,7 +631,9 @@ def build_suggested_area_config(
 
 
 def discover_eligible_areas(
-    hass: HomeAssistant, excluded_area_ids: set[str] | None = None
+    hass: HomeAssistant,
+    excluded_area_ids: set[str] | None = None,
+    global_options: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Return suggested configs for unconfigured HA areas with motion sensors."""
     area_reg = ar.async_get(hass)
@@ -623,7 +655,7 @@ def discover_eligible_areas(
         area_id = getattr(area, "id", None)
         if not area_id or (excluded_area_ids and area_id in excluded_area_ids):
             continue
-        discovered = discover_area_sensors(hass, area_id)
+        discovered = discover_area_sensors(hass, area_id, global_options=global_options)
         if discovered.get(CONF_MOTION_SENSORS):
             suggestions.append(
                 build_suggested_area_config(hass, area_id, getattr(area, "name", None))
@@ -652,7 +684,15 @@ def async_trigger_area_discoveries(hass: HomeAssistant) -> None:
             if area_id := data.get(CONF_AREA_ID):
                 configured_area_ids.add(str(area_id))
 
-    eligible = discover_eligible_areas(hass, excluded_area_ids=configured_area_ids)
+    active_entry = next(
+        (entry for entry in entries if getattr(entry, "source", None) != SOURCE_IGNORE),
+        None,
+    )
+    eligible = discover_eligible_areas(
+        hass,
+        excluded_area_ids=configured_area_ids,
+        global_options=active_entry.options if active_entry else None,
+    )
     eligible_ids = {cfg[CONF_AREA_ID] for cfg in eligible}
 
     flow_mgr = getattr(config_entries, "flow", None)

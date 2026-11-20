@@ -1630,6 +1630,60 @@ class TestAreaOccupancyOptionsFlow:
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_AWAY_MODE_ENTITY] == "input_boolean.vacation"
 
+    async def test_options_flow_global_settings_save_discovery_exclusions(
+        self,
+        config_flow_options_flow,
+        config_flow_mock_config_entry_with_areas,
+    ):
+        """Global discovery exclusions are saved in entry options."""
+        flow = config_flow_options_flow
+        flow.config_entry = config_flow_mock_config_entry_with_areas
+        user_input = {
+            **GLOBAL_SETTINGS_INPUT,
+            CONF_EXCLUDE_LIGHT_POWER: True,
+            CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
+            CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
+        }
+
+        result = await flow.async_step_global_settings(user_input)
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is True
+        assert result["data"][CONF_EXCLUDED_SENSORS] == ["sensor.garage_power"]
+        assert result["data"][CONF_EXCLUDED_INTEGRATIONS] == ["powercalc:light"]
+
+    async def test_options_flow_global_settings_clear_discovery_exclusions(
+        self,
+        hass: HomeAssistant,
+        config_flow_options_flow,
+        config_flow_mock_config_entry_with_areas,
+    ):
+        """Clearing global discovery exclusions removes their saved values."""
+        flow = config_flow_options_flow
+        flow.config_entry = config_flow_mock_config_entry_with_areas
+        hass.config_entries.async_update_entry(
+            flow.config_entry,
+            options={
+                CONF_EXCLUDE_LIGHT_POWER: True,
+                CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
+            },
+        )
+
+        result = await flow.async_step_global_settings(
+            {
+                **GLOBAL_SETTINGS_INPUT,
+                CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_EXCLUDED_SENSORS: [],
+                CONF_EXCLUDED_INTEGRATIONS: [],
+            }
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is False
+        assert result["data"][CONF_EXCLUDED_SENSORS] == []
+        assert result["data"][CONF_EXCLUDED_INTEGRATIONS] == []
+
     async def test_options_flow_global_settings_clears_away_mode_entity(
         self,
         hass: HomeAssistant,

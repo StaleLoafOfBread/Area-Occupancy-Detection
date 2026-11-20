@@ -526,7 +526,11 @@ class AreaConfig:
             data: Dictionary containing merged config entry data and options
 
         """
-        data = resolve_area_sensors(self.hass, data)
+        data = resolve_area_sensors(
+            self.hass,
+            data,
+            self.config_entry.options if self.config_entry is not None else None,
+        )
 
         # Validate threshold range
         threshold = float(data.get(CONF_THRESHOLD, DEFAULT_THRESHOLD)) / 100.0

@@ -573,7 +573,9 @@ async def _set_area_option(hass: HomeAssistant, call: ServiceCall) -> dict[str, 
         candidate, candidate.get(CONF_PURPOSE, DEFAULT_PURPOSE)
     )
 
-    if errors := validate_area_config(resolve_area_sensors(hass, candidate)):
+    if errors := validate_area_config(
+        resolve_area_sensors(hass, candidate, coordinator.config_entry.options)
+    ):
         raise ServiceValidationError(
             f"Invalid configuration for area '{area_name}': "
             + ", ".join(f"{field}={reason}" for field, reason in sorted(errors.items()))
