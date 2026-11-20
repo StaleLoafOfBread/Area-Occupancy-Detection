@@ -13,6 +13,7 @@ import voluptuous as vol
 
 from custom_components.area_occupancy.config_flow import (
     AREA_EDIT_SPOKES,
+    SECTION_AUTO_DISCOVERY_TYPES,
     SENSOR_GROUPS,
     AreaOccupancyConfigFlow,
     AreaOccupancyOptionsFlow,
@@ -50,6 +51,7 @@ from custom_components.area_occupancy.const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
     CONF_CUSTOM_BINARY_ACTIVE_STATES,
@@ -62,6 +64,8 @@ from custom_components.area_occupancy.const import (
     CONF_DOOR_ACTIVE_STATE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_ILLUMINANCE_SENSORS,
     CONF_LOCK_ACTIVE_STATE,
@@ -74,6 +78,7 @@ from custom_components.area_occupancy.const import (
     CONF_MOTION_SENSORS,
     CONF_MOTION_TIMEOUT,
     CONF_OPTION_PREFIX_AREA,
+    CONF_POWER_SENSORS,
     CONF_PURPOSE,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
@@ -3339,6 +3344,7 @@ async def test_integration_discovery_adds_subentry_to_active_entry(
     )
     assert step["type"] == FlowResultType.FORM
     assert step["step_id"] == "discovery_confirm"
+    assert CONF_ADJACENT_AREAS in step["data_schema"].schema
 
     with (
         patch.object(
@@ -3355,6 +3361,7 @@ async def test_integration_discovery_adds_subentry_to_active_entry(
                 CONF_PURPOSE: infer_purpose_from_name("Master Bedroom"),
                 CONF_AUTO_DISCOVER_SENSORS: True,
                 CONF_EXCLUDED_SENSORS: [],
+                CONF_ADJACENT_AREAS: [living_id],
             }
         )
 
@@ -3366,7 +3373,14 @@ async def test_integration_discovery_adds_subentry_to_active_entry(
     assert isinstance(added_subentry, ConfigSubentry)
     assert added_subentry.subentry_type == SUBENTRY_TYPE_AREA
     assert added_subentry.data[CONF_AREA_ID] == bedroom_id
+    assert added_subentry.data[CONF_ADJACENT_AREAS] == [living_id]
     assert added_subentry.subentry_id in entry.subentries
+    living_sub = next(
+        sub
+        for sub in entry.subentries.values()
+        if sub.data.get(CONF_AREA_ID) == living_id
+    )
+    assert living_sub.data[CONF_ADJACENT_AREAS] == [bedroom_id]
     mock_trigger.assert_called_once_with(hass)
 
 
@@ -3461,3 +3475,232 @@ async def test_integration_discovery_abort_reasons(hass: HomeAssistant) -> None:
     )
     assert configured_res["type"] == FlowResultType.ABORT
     assert configured_res["reason"] == "area_already_configured"
+
+
+async def test_basics_step_unchecking_domain_and_excluding_integration(
+    hass: HomeAssistant,
+) -> None:
+    """Unchecking a discovery domain and excluding an integration skips them cleanly."""
+    from custom_components.area_occupancy.discovery import DISCOVERABLE_SENSOR_KEYS
+
+    area_reg = ar.async_get(hass)
+    ent_reg = er.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    pir = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "office_pir",
+        suggested_object_id="office_motion",
+        original_device_class="motion",
+    )
+    ent_reg.async_update_entity(pir.entity_id, area_id=office.id)
+
+    magic = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "magic_areas",
+        "office_magic",
+        suggested_object_id="magic_office_motion",
+        original_device_class="occupancy",
+    )
+    ent_reg.async_update_entity(magic.entity_id, area_id=office.id)
+
+    power = ent_reg.async_get_or_create(
+        "sensor",
+        "powercalc",
+        "office_power",
+        suggested_object_id="office_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(power.entity_id, area_id=office.id)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    basics_form = await flow.async_step_area_basics()
+    assert basics_form["type"] == FlowResultType.FORM
+    schema = basics_form["data_schema"].schema
+    assert SECTION_AUTO_DISCOVERY_TYPES in schema
+    assert CONF_EXCLUDED_INTEGRATIONS in schema
+
+    excluded_int_marker = next(
+        key for key in schema if str(key) == CONF_EXCLUDED_INTEGRATIONS
+    )
+    excluded_int_options = {
+        opt["value"] for opt in schema[excluded_int_marker].config["options"]
+    }
+    assert {"esphome", "magic_areas", "powercalc"}.issubset(excluded_int_options)
+
+    section_marker = next(
+        key for key in schema if str(key) == SECTION_AUTO_DISCOVERY_TYPES
+    )
+    section_schema = schema[section_marker].schema.schema
+    domains_marker = next(
+        key for key in section_schema if str(key) == CONF_AUTO_DISCOVER_DOMAINS
+    )
+    assert set(domains_marker.default()) == set(DISCOVERABLE_SENSOR_KEYS)
+
+    without_power = [k for k in DISCOVERABLE_SENSOR_KEYS if k != CONF_POWER_SENSORS]
+    next_res = await flow.async_step_area_basics(
+        {
+            CONF_AREA_ID: office.id,
+            CONF_PURPOSE: "work",
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            SECTION_AUTO_DISCOVERY_TYPES: {
+                CONF_AUTO_DISCOVER_DOMAINS: without_power,
+            },
+            CONF_EXCLUDED_INTEGRATIONS: ["magic_areas"],
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert next_res["type"] == FlowResultType.FORM
+    assert next_res["step_id"] == "area_motion"
+    assert flow._area_config_draft[CONF_AUTO_DISCOVER_DOMAINS] == without_power
+    assert flow._area_config_draft[CONF_EXCLUDED_INTEGRATIONS] == ["magic_areas"]
+
+    motion_marker = next(
+        key for key in next_res["data_schema"].schema if str(key) == CONF_MOTION_SENSORS
+    )
+    assert motion_marker.description == {"suggested_value": [pir.entity_id]}
+
+    sensors_res = await flow.async_step_area_motion(
+        {CONF_MOTION_SENSORS: [pir.entity_id]}
+    )
+    assert sensors_res["type"] == FlowResultType.FORM
+    assert sensors_res["step_id"] == "area_sensors"
+
+    power_section = next(
+        key for key in sensors_res["data_schema"].schema if str(key) == "power"
+    )
+    power_inner = sensors_res["data_schema"].schema[power_section].schema.schema
+    power_marker = next(key for key in power_inner if str(key) == CONF_POWER_SENSORS)
+    assert (
+        power_marker.description is None
+        or "suggested_value" not in power_marker.description
+    )
+
+    with patch.object(
+        flow, "async_step_area_behavior", new_callable=AsyncMock
+    ) as behavior_step:
+        await flow.async_step_area_sensors({"power": {CONF_POWER_SENSORS: []}})
+
+    behavior_step.assert_awaited_once()
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
+
+
+async def test_discovery_confirm_persists_domain_filter_and_excluded_integrations(
+    hass: HomeAssistant,
+) -> None:
+    """Sectioned discovery options and excluded integrations persist on discovery_confirm."""
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+    await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+
+    result = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            SECTION_AUTO_DISCOVERY_TYPES: {
+                CONF_AUTO_DISCOVER_DOMAINS: [CONF_MOTION_SENSORS],
+            },
+            CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["subentries"][0]["data"]
+    assert saved[CONF_AUTO_DISCOVER_DOMAINS] == [CONF_MOTION_SENSORS]
+    assert saved[CONF_EXCLUDED_INTEGRATIONS] == ["powercalc"]
+
+
+async def test_basics_step_exclude_light_power_and_source_domain_options(
+    hass: HomeAssistant,
+) -> None:
+    """Light power sensors are excluded by default and platform:source_domain is offered."""
+    area_reg = ar.async_get(hass)
+    ent_reg = er.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    pir = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "office_pir",
+        suggested_object_id="office_motion",
+        original_device_class="motion",
+    )
+    ent_reg.async_update_entity(pir.entity_id, area_id=office.id)
+
+    lamp_power = ent_reg.async_get_or_create(
+        "sensor",
+        "powercalc",
+        "lamp_power",
+        suggested_object_id="desk_lamp_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(lamp_power.entity_id, area_id=office.id)
+    hass.states.async_set(
+        lamp_power.entity_id,
+        "12.3",
+        {"device_class": "power", "source_domain": "light"},
+    )
+
+    desk_power = ent_reg.async_get_or_create(
+        "sensor",
+        "zha",
+        "desk_power",
+        suggested_object_id="desk_plug_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(desk_power.entity_id, area_id=office.id)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    basics_form = await flow.async_step_area_basics()
+    schema = basics_form["data_schema"].schema
+    exclude_light_marker = next(
+        key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
+    )
+    assert exclude_light_marker.default() is True
+
+    excluded_int_marker = next(
+        key for key in schema if str(key) == CONF_EXCLUDED_INTEGRATIONS
+    )
+    options = {opt["value"] for opt in schema[excluded_int_marker].config["options"]}
+    assert {"powercalc", "powercalc:light", "esphome", "zha"}.issubset(options)
+
+    await flow.async_step_area_basics(
+        {
+            CONF_AREA_ID: office.id,
+            CONF_PURPOSE: "work",
+            CONF_EXCLUDE_LIGHT_POWER: True,
+        }
+    )
+    sensors_res = await flow.async_step_area_motion(
+        {CONF_MOTION_SENSORS: [pir.entity_id]}
+    )
+    power_section = next(
+        key for key in sensors_res["data_schema"].schema if str(key) == "power"
+    )
+    power_inner = sensors_res["data_schema"].schema[power_section].schema.schema
+    power_marker = next(key for key in power_inner if str(key) == CONF_POWER_SENSORS)
+    assert power_marker.description == {"suggested_value": [desk_power.entity_id]}
+
+    with patch.object(
+        flow, "async_step_area_behavior", new_callable=AsyncMock
+    ) as behavior_step:
+        await flow.async_step_area_sensors(
+            {"power": {CONF_POWER_SENSORS: [desk_power.entity_id]}}
+        )
+
+    behavior_step.assert_awaited_once()
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []

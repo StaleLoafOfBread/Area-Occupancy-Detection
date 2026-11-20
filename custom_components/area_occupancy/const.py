@@ -89,7 +89,10 @@ CONF_ADJACENT_AREAS: Final = (
     "adjacent_areas"  # JSON list of adjacent area_ids; consumed by AreaRelationships
 )
 CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
+CONF_AUTO_DISCOVER_DOMAINS: Final = "auto_discover_domains"
+CONF_EXCLUDED_INTEGRATIONS: Final = "excluded_integrations"
 CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
+CONF_EXCLUDE_LIGHT_POWER: Final = "exclude_light_power"
 CONF_EXPAND_GROUPS: Final = "expand_groups"
 CONF_MOTION_SENSORS: Final = "motion_sensors"
 CONF_MOTION_PROB_GIVEN_TRUE: Final = "motion_prob_given_true"
@@ -170,6 +173,7 @@ CONF_WEIGHT_WASP: Final = "weight_wasp"
 
 # Default values
 DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
+DEFAULT_EXCLUDE_LIGHT_POWER: Final[bool] = True
 DEFAULT_EXPAND_GROUPS: Final[bool] = True
 DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0

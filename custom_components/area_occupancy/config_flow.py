@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import voluptuous as vol
 
@@ -93,6 +93,7 @@ from .const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
     CONF_CLOSED_DOOR_HOLD,
@@ -110,6 +111,8 @@ from .const import (
     CONF_DOOR_ACTIVE_STATE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
     CONF_HEALTH_ENABLED,
@@ -174,6 +177,7 @@ from .const import (
     DEFAULT_DECAY_ENABLED,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
+    DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXPAND_GROUPS,
     DEFAULT_HEALTH_ENABLED,
     DEFAULT_MEDIA_ACTIVE_STATES,
@@ -215,11 +219,13 @@ from .const import (
 from .data.purpose import AreaPurpose, Purpose, get_purpose_options
 from .discovery import (
     ALL_AREA_SENSOR_KEYS,
+    DISCOVERABLE_SENSOR_KEYS,
     area_discovery_unique_id,
     async_trigger_area_discoveries,
     build_suggested_area_config,
     discover_area_sensors,
     discover_eligible_areas,
+    get_enabled_discovery_domains,
     is_weather_entity,
     resolve_area_sensors,
 )
@@ -292,6 +298,96 @@ SENSOR_GROUP_KEYS: dict[str, tuple[str, ...]] = {
     "wifi_clients": (CONF_WIFI_CLIENTS_SENSORS,),
     "custom": (CONF_CUSTOM_BINARY_SENSORS, CONF_CUSTOM_NUMERIC_SENSORS),
 }
+
+SECTION_AUTO_DISCOVERY_TYPES: Final = "auto_discovery_types"
+_AUTO_DISCOVER_DOMAIN_LABELS: Final[dict[str, str]] = {
+    CONF_MOTION_SENSORS: "Motion & Presence",
+    CONF_DOOR_SENSORS: "Doors",
+    CONF_WINDOW_SENSORS: "Windows",
+    CONF_LOCK_SENSORS: "Locks",
+    CONF_COVER_SENSORS: "Covers",
+    CONF_MEDIA_DEVICES: "Media Players",
+    CONF_POWER_SENSORS: "Power & Current",
+    CONF_TEMPERATURE_SENSORS: "Temperature",
+    CONF_HUMIDITY_SENSORS: "Humidity & Moisture",
+    CONF_ILLUMINANCE_SENSORS: "Illuminance",
+    CONF_CO2_SENSORS: "CO2",
+    CONF_CO_SENSORS: "CO",
+    CONF_SOUND_PRESSURE_SENSORS: "Sound Pressure",
+    CONF_PRESSURE_SENSORS: "Pressure",
+    CONF_AIR_QUALITY_SENSORS: "Air Quality",
+    CONF_VOC_SENSORS: "VOC",
+    CONF_PM25_SENSORS: "PM2.5",
+    CONF_PM10_SENSORS: "PM10",
+}
+
+
+def _get_auto_discover_domain_options() -> list[SelectOptionDict]:
+    """Return ordered checkbox options for each auto-discoverable sensor type."""
+    options = [
+        SelectOptionDict(value=key, label=label)
+        for key, label in _AUTO_DISCOVER_DOMAIN_LABELS.items()
+        if key in DISCOVERABLE_SENSOR_KEYS
+    ]
+    options.extend(
+        SelectOptionDict(value=key, label=key)
+        for key in DISCOVERABLE_SENSOR_KEYS
+        if key not in _AUTO_DISCOVER_DOMAIN_LABELS
+    )
+    return options
+
+
+def _get_ordered_auto_discover_domains(data: dict[str, Any]) -> list[str]:
+    """Return enabled discovery domains ordered to match the checklist options."""
+    enabled = get_enabled_discovery_domains(data)
+    return [
+        opt["value"]
+        for opt in _get_auto_discover_domain_options()
+        if opt["value"] in enabled
+    ]
+
+
+def _get_excluded_integration_options(
+    hass: HomeAssistant | None,
+    current: dict[str, Any] | None = None,
+) -> list[SelectOptionDict]:
+    """Return sorted integration options pre-populated from the entity registry."""
+    platforms: set[str] = set()
+    if hass is not None:
+        with contextlib.suppress(AttributeError, KeyError, RuntimeError, TypeError):
+            registry = er.async_get(hass)
+            for entry in registry.entities.values():
+                if entry.platform and entry.platform != DOMAIN:
+                    platforms.add(entry.platform)
+                    state = hass.states.get(entry.entity_id)
+                    attrs = getattr(state, "attributes", None) if state else None
+                    source_domain = attrs.get("source_domain") if attrs else None
+                    if isinstance(source_domain, str) and source_domain:
+                        platforms.add(f"{entry.platform}:{source_domain.lower()}")
+    for platform in (current or {}).get(CONF_EXCLUDED_INTEGRATIONS) or []:
+        if isinstance(platform, str) and platform:
+            platforms.add(platform)
+
+    integrations = (
+        hass.data.get("integrations", {})
+        if hass is not None and isinstance(getattr(hass, "data", None), dict)
+        else {}
+    )
+    options: list[SelectOptionDict] = []
+    for platform in sorted(platforms, key=str.lower):
+        base_platform, _, source_domain = platform.partition(":")
+        integration = integrations.get(base_platform)
+        name = (
+            getattr(integration, "name", None)
+            or base_platform.replace("_", " ").title()
+        )
+        label = (
+            f"{name} — {source_domain.replace('_', ' ').title()} ({platform})"
+            if source_domain
+            else f"{name} ({platform})"
+        )
+        options.append(SelectOptionDict(value=platform, label=label))
+    return options
 
 
 def _format_seconds(seconds: float) -> str:
@@ -1141,6 +1237,7 @@ def _create_basics_step_schema(
     is_editing: bool = False,
     adjacent_options: list[SelectOptionDict] | None = None,
     current: dict[str, Any] | None = None,
+    hass: HomeAssistant | None = None,
 ) -> dict[vol.Marker, Any]:
     """Create schema for wizard step 1: area selection and purpose.
 
@@ -1155,6 +1252,8 @@ def _create_basics_step_schema(
             default into any submission that omits the field, so a fixed
             default silently reset an existing area's purpose to "social"
             and cleared its adjacency.
+        hass: Optional Home Assistant instance used to pre-populate available
+            integrations for exclusion.
     """
     current = current or {}
     fields: dict[vol.Marker, Any] = {}
@@ -1175,6 +1274,23 @@ def _create_basics_step_schema(
             ),
         )
     ] = BooleanSelector()
+    fields[vol.Optional(SECTION_AUTO_DISCOVERY_TYPES)] = section(
+        vol.Schema(
+            {
+                vol.Optional(
+                    CONF_AUTO_DISCOVER_DOMAINS,
+                    default=_get_ordered_auto_discover_domains(current),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=_get_auto_discover_domain_options(),
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                    )
+                )
+            }
+        ),
+        {"collapsed": True},
+    )
     fields[
         vol.Optional(
             CONF_EXPAND_GROUPS,
@@ -1183,10 +1299,29 @@ def _create_basics_step_schema(
     ] = BooleanSelector()
     fields[
         vol.Optional(
+            CONF_EXCLUDE_LIGHT_POWER,
+            default=current.get(CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER),
+        )
+    ] = BooleanSelector()
+    fields[
+        vol.Optional(
             CONF_EXCLUDED_SENSORS,
             default=current.get(CONF_EXCLUDED_SENSORS, []),
         )
     ] = EntitySelector(EntitySelectorConfig(multiple=True))
+    fields[
+        vol.Optional(
+            CONF_EXCLUDED_INTEGRATIONS,
+            default=list(current.get(CONF_EXCLUDED_INTEGRATIONS) or []),
+        )
+    ] = SelectSelector(
+        SelectSelectorConfig(
+            options=_get_excluded_integration_options(hass, current),
+            multiple=True,
+            custom_value=True,
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
     if adjacent_options:
         adjacent_default = list(current.get(CONF_ADJACENT_AREAS) or [])
         fields[vol.Optional(CONF_ADJACENT_AREAS, default=adjacent_default)] = (
@@ -1605,10 +1740,16 @@ def _sync_discovered_and_excluded(
     if not area_id:
         return updated
 
+    enabled_domains = get_enabled_discovery_domains(draft)
     discovered = discover_area_sensors(
         hass,
         area_id,
         expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+        enabled_domains=enabled_domains,
+        excluded_platforms=draft.get(CONF_EXCLUDED_INTEGRATIONS),
+        exclude_light_power=draft.get(
+            CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
+        ),
     )
     excluded: list[str] = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
     excluded_changed = False
@@ -2039,7 +2180,11 @@ class BaseOccupancyFlow:
         """Handle completion of the area config wizard. Overridden by subclasses."""
         raise NotImplementedError
 
-    def _build_adjacent_area_options(self) -> list[SelectOptionDict]:
+    def _build_adjacent_area_options(
+        self,
+        areas: list[dict[str, Any]] | None = None,
+        exclude_area_id: str | None = None,
+    ) -> list[SelectOptionDict]:
         """Build the multi-select options for the adjacency field.
 
         Returns options for every area configured in this entry except the
@@ -2049,8 +2194,10 @@ class BaseOccupancyFlow:
         """
         options: list[SelectOptionDict] = []
         seen: set[str] = set()
-        editing_area_id = self._area_being_edited
-        for area in self._get_wizard_areas():
+        editing_area_id = (
+            exclude_area_id if exclude_area_id is not None else self._area_being_edited
+        )
+        for area in areas if areas is not None else self._get_wizard_areas():
             other_area_id = area.get(CONF_AREA_ID)
             # Defensive: malformed persisted data could leave a non-string
             # value here. Comparison still works but downstream
@@ -2324,13 +2471,14 @@ class BaseOccupancyFlow:
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            flattened_input = flatten_sectioned_input(user_input)
             # Read-only area selector doesn't submit a value when editing,
             # so fill it in from the draft
-            if self._area_being_edited and CONF_AREA_ID not in user_input:
-                user_input[CONF_AREA_ID] = self._area_config_draft.get(
+            if self._area_being_edited and CONF_AREA_ID not in flattened_input:
+                flattened_input[CONF_AREA_ID] = self._area_config_draft.get(
                     CONF_AREA_ID, self._area_being_edited
                 )
-            area_id = user_input.get(CONF_AREA_ID, "")
+            area_id = flattened_input.get(CONF_AREA_ID, "")
             if not area_id:
                 errors[CONF_AREA_ID] = "area_required"
             elif self.hass:
@@ -2343,12 +2491,12 @@ class BaseOccupancyFlow:
                 areas = self._get_wizard_areas()
                 errors.update(
                     self._validate_duplicate_area_id(
-                        user_input, areas, self._area_being_edited, self.hass
+                        flattened_input, areas, self._area_being_edited, self.hass
                     )
                 )
 
             if not errors:
-                updates = dict(user_input)
+                updates = dict(flattened_input)
                 if CONF_EXCLUDED_SENSORS in updates:
                     excluded_set = set(updates.get(CONF_EXCLUDED_SENSORS) or [])
                     updates.update(
@@ -2369,14 +2517,15 @@ class BaseOccupancyFlow:
             is_editing=self._area_being_edited is not None,
             adjacent_options=adjacent_options,
             current=self._area_config_draft if self._area_being_edited else None,
+            hass=self.hass,
         )
         base_schema = vol.Schema(schema_dict)
 
         # Apply suggested values from draft or user_input (for error re-display)
-        suggested = (
-            user_input
-            if user_input is not None
-            else _draft_to_suggested(
+        if user_input is not None:
+            suggested: dict[str, Any] = user_input
+        else:
+            suggested = _draft_to_suggested(
                 self._area_config_draft,
                 {
                     CONF_AREA_ID,
@@ -2384,10 +2533,17 @@ class BaseOccupancyFlow:
                     CONF_ADJACENT_AREAS,
                     CONF_AUTO_DISCOVER_SENSORS,
                     CONF_EXPAND_GROUPS,
+                    CONF_EXCLUDE_LIGHT_POWER,
                     CONF_EXCLUDED_SENSORS,
+                    CONF_EXCLUDED_INTEGRATIONS,
                 },
             )
-        )
+            if CONF_AUTO_DISCOVER_DOMAINS in self._area_config_draft:
+                suggested[SECTION_AUTO_DISCOVERY_TYPES] = {
+                    CONF_AUTO_DISCOVER_DOMAINS: _get_ordered_auto_discover_domains(
+                        self._area_config_draft
+                    )
+                }
         if suggested:
             data_schema = self.add_suggested_values_to_schema(base_schema, suggested)
         else:
@@ -3080,12 +3236,21 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
 
         discovered = discover_area_sensors(self.hass, area_id)
         suggested_config = build_suggested_area_config(self.hass, area_id, area_name)
+        adjacent_options = (
+            self._build_adjacent_area_options(
+                areas=[data for _, data in iter_area_subentries(active_entry)],
+                exclude_area_id=area_id,
+            )
+            if active_entry is not None
+            else []
+        )
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            flattened_input = flatten_sectioned_input(user_input)
             candidate = {
                 **suggested_config,
-                **user_input,
+                **flattened_input,
                 CONF_AREA_ID: area_id,
             }
             apply_purpose_based_decay_default(candidate, candidate.get(CONF_PURPOSE))
@@ -3093,6 +3258,9 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
 
             if not errors:
                 if active_entry is not None:
+                    self._persist_area_subentry(
+                        active_entry, candidate, None, create_missing=False
+                    )
                     self.hass.config_entries.async_add_subentry(
                         active_entry,
                         ConfigSubentry(
@@ -3124,7 +3292,12 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
                 )
 
         base_schema = vol.Schema(
-            _create_basics_step_schema(is_editing=True, current=suggested_config)
+            _create_basics_step_schema(
+                is_editing=True,
+                adjacent_options=adjacent_options,
+                current=suggested_config,
+                hass=self.hass,
+            )
         )
         data_schema = (
             self.add_suggested_values_to_schema(base_schema, user_input)

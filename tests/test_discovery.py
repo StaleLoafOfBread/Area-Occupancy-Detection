@@ -10,11 +10,15 @@ import pytest
 
 from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
+    CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_DOOR_SENSORS,
+    CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
     CONF_MOTION_SENSORS,
+    CONF_POWER_SENSORS,
     CONF_PURPOSE,
     CONF_TEMPERATURE_SENSORS,
     DEFAULT_PURPOSE,
@@ -25,6 +29,7 @@ from custom_components.area_occupancy.data.purpose import (
     infer_purpose_from_name,
 )
 from custom_components.area_occupancy.discovery import (
+    DISCOVERABLE_SENSOR_KEYS,
     area_discovery_unique_id,
     async_track_discovery,
     async_trigger_area_discoveries,
@@ -371,6 +376,7 @@ def test_build_suggested_area_config() -> None:
 
     assert suggested[CONF_AREA_ID] == "bedroom"
     assert suggested[CONF_AUTO_DISCOVER_SENSORS] is True
+    assert suggested[CONF_AUTO_DISCOVER_DOMAINS] == list(DISCOVERABLE_SENSOR_KEYS)
     assert suggested[CONF_PURPOSE] == infer_purpose_from_name("Master Bedroom")
 
 
@@ -679,3 +685,322 @@ def test_expand_groups_disabled_uses_group_entity() -> None:
         )
 
     assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.kitchen_motion_group"]
+
+
+def test_expand_groups_skips_missing_entities() -> None:
+    """Group members absent from both entity registry and states are ignored."""
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            _reg_entry(
+                "binary_sensor.office_group",
+                area_id="office",
+                device_class="occupancy",
+            ),
+            _reg_entry("binary_sensor.real_motion", device_class="occupancy"),
+        ],
+        states={
+            "binary_sensor.office_group": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.real_motion",
+                    "binary_sensor.stale_missing_entity",
+                ],
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(hass, {CONF_AREA_ID: "office"})
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.real_motion"]
+
+
+def test_expand_groups_excludes_own_integration_members() -> None:
+    """Expanding auto-discovered or manual groups strips area_occupancy entities."""
+    own_entry = _reg_entry(
+        "binary_sensor.office_occupancy_status", device_class="occupancy"
+    )
+    own_entry.platform = "area_occupancy"
+    group_entry = _reg_entry(
+        "binary_sensor.office_group",
+        area_id="office",
+        device_class="occupancy",
+    )
+    pir_entry = _reg_entry("binary_sensor.real_pir", device_class="motion")
+    hass, registry, devices = _make_group_hass(
+        entities=[group_entry, own_entry, pir_entry],
+        states={
+            "binary_sensor.office_group": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.office_occupancy_status",
+                    "binary_sensor.real_pir",
+                ],
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        auto_resolved = resolve_area_sensors(hass, {CONF_AREA_ID: "office"})
+        manual_resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_MOTION_SENSORS: ["binary_sensor.office_group"],
+            },
+        )
+
+    assert auto_resolved[CONF_MOTION_SENSORS] == ["binary_sensor.real_pir"]
+    assert manual_resolved[CONF_MOTION_SENSORS] == ["binary_sensor.real_pir"]
+
+
+def test_expand_groups_disabled_skips_group_containing_own_entity() -> None:
+    """When expand_groups is False, groups containing own entities are skipped."""
+    own_entry = _reg_entry(
+        "binary_sensor.office_occupancy_status", device_class="occupancy"
+    )
+    own_entry.platform = "area_occupancy"
+    outer_group = _reg_entry(
+        "binary_sensor.outer_group",
+        area_id="office",
+        device_class="occupancy",
+    )
+    nested_group = _reg_entry(
+        "binary_sensor.nested_group",
+        device_class="occupancy",
+    )
+    clean_group = _reg_entry(
+        "binary_sensor.clean_group",
+        area_id="office",
+        device_class="motion",
+    )
+    pir_entry = _reg_entry("binary_sensor.real_pir", device_class="motion")
+    hass, registry, devices = _make_group_hass(
+        entities=[outer_group, nested_group, own_entry, clean_group, pir_entry],
+        states={
+            "binary_sensor.outer_group": {
+                "device_class": "occupancy",
+                "entity_id": ["binary_sensor.nested_group"],
+            },
+            "binary_sensor.nested_group": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.office_occupancy_status",
+                    "binary_sensor.real_pir",
+                ],
+            },
+            "binary_sensor.clean_group": {
+                "device_class": "motion",
+                "entity_id": ["binary_sensor.real_pir"],
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass, {CONF_AREA_ID: "office", CONF_EXPAND_GROUPS: False}
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.clean_group"]
+
+
+def test_auto_discover_domains_allows_unchecking_power() -> None:
+    """Only enabled discovery domains are auto-added while manual selections remain."""
+    entities = [
+        entity("binary_sensor.pir", original_device_class="motion"),
+        entity("sensor.temp", original_device_class="temperature"),
+        entity("sensor.plug_power", original_device_class="power"),
+    ]
+    without_power = [k for k in DISCOVERABLE_SENSOR_KEYS if k != CONF_POWER_SENSORS]
+    result = resolve(
+        {
+            CONF_AREA_ID: "room",
+            CONF_AUTO_DISCOVER_DOMAINS: without_power,
+            CONF_POWER_SENSORS: ["sensor.manual_power"],
+        },
+        *entities,
+    )
+    assert result[CONF_MOTION_SENSORS] == ["binary_sensor.pir"]
+    assert result[CONF_TEMPERATURE_SENSORS] == ["sensor.temp"]
+    assert result[CONF_POWER_SENSORS] == ["sensor.manual_power"]
+
+    empty_result = resolve(
+        {
+            CONF_AREA_ID: "room",
+            CONF_AUTO_DISCOVER_DOMAINS: [],
+            CONF_POWER_SENSORS: ["sensor.manual_power"],
+        },
+        *entities,
+    )
+    assert CONF_MOTION_SENSORS not in empty_result
+    assert CONF_TEMPERATURE_SENSORS not in empty_result
+    assert empty_result[CONF_POWER_SENSORS] == ["sensor.manual_power"]
+
+
+def test_excluded_integrations_skips_auto_add_and_groups() -> None:
+    """Entities and groups from excluded integrations are not auto-added."""
+    powercalc = _reg_entry(
+        "sensor.powercalc_watt", area_id="office", device_class="power"
+    )
+    powercalc.platform = "powercalc"
+    magic_group = _reg_entry(
+        "binary_sensor.magic_group", area_id="office", device_class="motion"
+    )
+    magic_group.platform = "magic_areas"
+    ha_group = _reg_entry("group.ha_group", area_id="office")
+    ha_group.platform = "group"
+    real_pir = _reg_entry(
+        "binary_sensor.real_pir", area_id="office", device_class="motion"
+    )
+    real_pir.platform = "esphome"
+    real_temp = _reg_entry("sensor.real_temp", device_class="temperature")
+    real_temp.platform = "esphome"
+
+    hass, registry, devices = _make_group_hass(
+        entities=[powercalc, magic_group, ha_group, real_pir, real_temp],
+        states={
+            "binary_sensor.magic_group": {
+                "device_class": "motion",
+                "entity_id": ["binary_sensor.real_pir"],
+            },
+            "group.ha_group": {
+                "entity_id": ["sensor.powercalc_watt", "sensor.real_temp"],
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        auto_only = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc", "Magic_Areas"],
+            },
+        )
+        with_manual = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+                CONF_POWER_SENSORS: ["sensor.powercalc_watt"],
+            },
+        )
+
+    assert auto_only[CONF_MOTION_SENSORS] == ["binary_sensor.real_pir"]
+    assert auto_only[CONF_TEMPERATURE_SENSORS] == ["sensor.real_temp"]
+    assert CONF_POWER_SENSORS not in auto_only
+    assert with_manual[CONF_POWER_SENSORS] == ["sensor.powercalc_watt"]
+
+
+def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
+    """Light-backed power sensors are excluded by default while appliance power stays."""
+    lamp_power = _reg_entry(
+        "sensor.desk_lamp_power", area_id="office", device_class="power"
+    )
+    lamp_power.platform = "powercalc"
+
+    ceiling_light = _reg_entry("light.office_ceiling", area_id="office")
+    ceiling_light.platform = "mqtt"
+    ceiling_light.device_id = "dev_ceiling"
+    ceiling_power = _reg_entry(
+        "sensor.office_ceiling_power", area_id="office", device_class="power"
+    )
+    ceiling_power.platform = "powercalc"
+    ceiling_power.device_id = "dev_ceiling"
+
+    rosey_power = _reg_entry(
+        "sensor.rosey_power", area_id="office", device_class="power"
+    )
+    rosey_power.platform = "powercalc"
+
+    desk_plug = _reg_entry(
+        "sensor.desk_plug_power", area_id="office", device_class="power"
+    )
+    desk_plug.platform = "zha"
+
+    hass, registry, devices = _make_group_hass(
+        entities=[lamp_power, ceiling_light, ceiling_power, rosey_power, desk_plug],
+        states={
+            "sensor.desk_lamp_power": {
+                "device_class": "power",
+                "source_domain": "light",
+                "source_entity": "light.desk_lamp",
+            },
+            "sensor.rosey_power": {
+                "device_class": "power",
+                "source_domain": "vacuum",
+                "source_entity": "vacuum.rosey_the_robot",
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        default_res = resolve_area_sensors(hass, {CONF_AREA_ID: "office"})
+        include_lights_res = resolve_area_sensors(
+            hass, {CONF_AREA_ID: "office", CONF_EXCLUDE_LIGHT_POWER: False}
+        )
+        vacuum_blacklisted_res = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc:vacuum"],
+            },
+        )
+
+    assert default_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_plug_power",
+        "sensor.rosey_power",
+    ]
+    assert include_lights_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_lamp_power",
+        "sensor.desk_plug_power",
+        "sensor.office_ceiling_power",
+        "sensor.rosey_power",
+    ]
+    assert vacuum_blacklisted_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_lamp_power",
+        "sensor.desk_plug_power",
+        "sensor.office_ceiling_power",
+    ]
