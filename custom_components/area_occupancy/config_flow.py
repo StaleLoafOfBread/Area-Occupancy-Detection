@@ -306,6 +306,7 @@ SECTION_AUTO_DISCOVERY_TYPES: Final = "auto_discovery_types"
 AUTO_ADDED_SECTION: Final = "auto_added"
 EXPLICIT_SECTION: Final = "explicit"
 AUTO_ADDED_ENTITIES_FIELD: Final = "auto_added_entities"
+AUTO_ADDED_FIELD_PREFIX: Final = "auto_added_"
 _AUTO_DISCOVER_DOMAIN_LABELS: Final[dict[str, str]] = {
     CONF_MOTION_SENSORS: "Motion & Presence",
     CONF_DOOR_SENSORS: "Doors",
@@ -1414,7 +1415,7 @@ def _create_sensors_step_schema(
     hass: HomeAssistant,
     include_entities: dict[str, list[str]] | None = None,
     groups: tuple[str, ...] | list[str] | None = None,
-    auto_added_entities: str = "None",
+    auto_added_entities: dict[str, str] | None = None,
 ) -> dict[vol.Marker, Any]:
     """Create schema for wizard step 3: additional sensors with sections.
 
@@ -1423,7 +1424,7 @@ def _create_sensors_step_schema(
         include_entities: Pre-computed candidate entities per channel.
         groups: Subset of ``SENSOR_GROUPS`` to render. ``None`` renders all
             groups (the add wizard); a single group renders the edit hub spoke.
-        auto_added_entities: Read-only summary of entities included by discovery.
+        auto_added_entities: Read-only summaries of discovered entities per group.
     """
     if include_entities is None:
         include_entities = _get_include_entities(hass)
@@ -1480,18 +1481,15 @@ def _create_sensors_step_schema(
     }
     explicit_fields: dict[vol.Marker, Any] = {}
     for group in selected:
+        if group_text := (auto_added_entities or {}).get(group):
+            explicit_fields[
+                vol.Optional(
+                    f"{AUTO_ADDED_FIELD_PREFIX}{group}",
+                    description={"suggested_value": group_text},
+                )
+            ] = TextSelector(TextSelectorConfig(multiline=True, read_only=True))
         explicit_fields.update(builders[group]().schema)
     return {
-        vol.Required(AUTO_ADDED_SECTION): section(
-            vol.Schema(
-                {
-                    vol.Optional(
-                        AUTO_ADDED_ENTITIES_FIELD,
-                        description={"suggested_value": auto_added_entities},
-                    ): TextSelector(TextSelectorConfig(multiline=True, read_only=True))
-                }
-            )
-        ),
         vol.Required(EXPLICIT_SECTION): section(
             vol.Schema(explicit_fields), {"collapsed": False}
         ),
@@ -1874,20 +1872,31 @@ def _auto_added_sensor_text(
         if not entities:
             continue
         label = _AUTO_DISCOVER_DOMAIN_LABELS.get(key, key.replace("_", " ").title())
-        labels: list[str] = []
+        lines.append(f"{label}:")
         for entity_id in entities:
             state = hass.states.get(entity_id)
             name = state.name if state and state.name else entity_id
-            labels.append(f"{name} ({entity_id})")
-        lines.append(f"{label}: {', '.join(labels)}")
+            lines.append(f"- {name} ({entity_id})")
     return "\n".join(lines) or "None"
 
 
 def _editable_form_input(user_input: dict[str, Any]) -> dict[str, Any]:
-    """Flatten form sections and discard the read-only automatic-sensors field."""
+    """Flatten form sections and discard read-only automatic-sensor fields."""
     flattened = flatten_sectioned_input(user_input)
+    for key in tuple(flattened):
+        if isinstance(key, str) and key.startswith(AUTO_ADDED_FIELD_PREFIX):
+            flattened.pop(key)
     flattened.pop(AUTO_ADDED_ENTITIES_FIELD, None)
     return flattened
+
+
+def _editable_section_input(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Return submitted section values without read-only discovery summaries."""
+    return {
+        key: value
+        for key, value in user_input.items()
+        if not (isinstance(key, str) and key.startswith(AUTO_ADDED_FIELD_PREFIX))
+    }
 
 
 def _resolve_area_id_to_name(hass: HomeAssistant, area_id: str) -> str:
@@ -2796,7 +2805,12 @@ class BaseOccupancyFlow:
         base_schema = vol.Schema(schema_dict)
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(
-                base_schema, {EXPLICIT_SECTION: user_input.get(EXPLICIT_SECTION, {})}
+                base_schema,
+                {
+                    EXPLICIT_SECTION: _editable_section_input(
+                        user_input.get(EXPLICIT_SECTION, {})
+                    )
+                },
             )
         else:
             explicit_config = _explicit_sensor_config(
@@ -2861,9 +2875,18 @@ class BaseOccupancyFlow:
                     return await self.async_step_area_behavior()
 
         resolved_draft = self._resolve_area_sensors(self._area_config_draft)
-        auto_added_text = _auto_added_sensor_text(
-            self.hass, resolved_draft, active_sensor_keys
-        )
+        auto_added_text = {
+            group: text
+            for group in groups
+            if (
+                text := _auto_added_sensor_text(
+                    self.hass,
+                    resolved_draft,
+                    SENSOR_GROUP_KEYS.get(group, ()),
+                )
+            )
+            != "None"
+        }
         schema_dict = _create_sensors_step_schema(
             self.hass,
             groups=groups,
@@ -2874,7 +2897,12 @@ class BaseOccupancyFlow:
         # For edit mode with sections, need nested suggested values
         if user_input is not None:
             data_schema = self.add_suggested_values_to_schema(
-                base_schema, {EXPLICIT_SECTION: user_input.get(EXPLICIT_SECTION, {})}
+                base_schema,
+                {
+                    EXPLICIT_SECTION: _editable_section_input(
+                        user_input.get(EXPLICIT_SECTION, {})
+                    )
+                },
             )
         elif self._area_config_draft:
             explicit_config = _explicit_sensor_config(

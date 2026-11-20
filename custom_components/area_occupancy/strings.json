@@ -326,19 +326,19 @@
             },
             "area_sensors": {
                 "title": "Additional Sensors — {area_name}",
-                "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                 "sections": {
-                    "auto_added": {
-                        "name": "Auto-added (read-only)",
-                        "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                        "data": {
-                            "auto_added_entities": "Auto-added sensors"
-                        }
-                    },
                     "explicit": {
-                        "name": "Explicitly selected",
-                        "description": "These selections are editable and are kept when discovery settings change.",
+                        "name": "Sensors",
+                        "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                         "data": {
+                            "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                            "auto_added_media": "Auto-added — media players",
+                            "auto_added_appliances": "Auto-added — appliances",
+                            "auto_added_environmental": "Auto-added — environmental sensors",
+                            "auto_added_power": "Auto-added — power sensors",
+                            "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                            "auto_added_custom": "Auto-added — custom sensors",
                             "door_sensors": "Door Sensors",
                             "door_active_state": "Door Active State",
                             "weight_door": "Door Weight",
@@ -872,19 +872,19 @@
             },
             "area_sensors": {
                 "title": "Additional Sensors — {area_name}",
-                "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                 "sections": {
-                    "auto_added": {
-                        "name": "Auto-added (read-only)",
-                        "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                        "data": {
-                            "auto_added_entities": "Auto-added sensors"
-                        }
-                    },
                     "explicit": {
-                        "name": "Explicitly selected",
-                        "description": "These selections are editable and are kept when discovery settings change.",
+                        "name": "Sensors",
+                        "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                         "data": {
+                            "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                            "auto_added_media": "Auto-added — media players",
+                            "auto_added_appliances": "Auto-added — appliances",
+                            "auto_added_environmental": "Auto-added — environmental sensors",
+                            "auto_added_power": "Auto-added — power sensors",
+                            "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                            "auto_added_custom": "Auto-added — custom sensors",
                             "door_sensors": "Door Sensors",
                             "door_active_state": "Door Active State",
                             "weight_door": "Door Weight",
@@ -1337,19 +1337,19 @@
                 },
                 "area_sensors": {
                     "title": "Additional Sensors — {area_name}",
-                    "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                    "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                     "sections": {
-                        "auto_added": {
-                            "name": "Auto-added (read-only)",
-                            "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                            "data": {
-                                "auto_added_entities": "Auto-added sensors"
-                            }
-                        },
                         "explicit": {
-                            "name": "Explicitly selected",
-                            "description": "These selections are editable and are kept when discovery settings change.",
+                            "name": "Sensors",
+                            "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                             "data": {
+                                "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                                "auto_added_media": "Auto-added — media players",
+                                "auto_added_appliances": "Auto-added — appliances",
+                                "auto_added_environmental": "Auto-added — environmental sensors",
+                                "auto_added_power": "Auto-added — power sensors",
+                                "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                                "auto_added_custom": "Auto-added — custom sensors",
                                 "door_sensors": "Door Sensors",
                                 "door_active_state": "Door Active State",
                                 "weight_door": "Door Weight",

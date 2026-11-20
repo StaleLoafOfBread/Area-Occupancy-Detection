@@ -14,6 +14,7 @@ import voluptuous as vol
 from custom_components.area_occupancy.config_flow import (
     AREA_EDIT_SPOKES,
     AUTO_ADDED_ENTITIES_FIELD,
+    AUTO_ADDED_FIELD_PREFIX,
     AUTO_ADDED_SECTION,
     EXPLICIT_SECTION,
     SECTION_AUTO_DISCOVERY_TYPES,
@@ -3307,33 +3308,29 @@ async def test_sensors_step_separates_readonly_discovery_from_explicit_selection
     ):
         form = await flow.async_step_area_sensors()
         assert [marker.schema for marker in form["data_schema"].schema] == [
-            AUTO_ADDED_SECTION,
             EXPLICIT_SECTION,
         ]
-        auto_section = next(
-            value
-            for marker, value in form["data_schema"].schema.items()
-            if marker.schema == AUTO_ADDED_SECTION
-        )
-        auto_marker = next(
-            marker
-            for marker in auto_section.schema.schema
-            if marker.schema == AUTO_ADDED_ENTITIES_FIELD
-        )
-        assert auto_section.schema.schema[auto_marker].config["read_only"]
-        assert "sensor.temp_auto" in auto_marker.description["suggested_value"]
-        assert "sensor.temp_ignore" in auto_marker.description["suggested_value"]
 
         explicit_section = next(
             value
             for marker, value in form["data_schema"].schema.items()
             if marker.schema == EXPLICIT_SECTION
         )
+        field_markers = list(explicit_section.schema.schema)
+        auto_marker = next(
+            marker
+            for marker in field_markers
+            if marker.schema == f"{AUTO_ADDED_FIELD_PREFIX}environmental"
+        )
         temp_marker = next(
             marker
-            for marker in explicit_section.schema.schema
+            for marker in field_markers
             if marker.schema == CONF_TEMPERATURE_SENSORS
         )
+        assert explicit_section.schema.schema[auto_marker].config["read_only"]
+        assert "sensor.temp_auto" in auto_marker.description["suggested_value"]
+        assert "sensor.temp_ignore" in auto_marker.description["suggested_value"]
+        assert field_markers.index(auto_marker) < field_markers.index(temp_marker)
         assert temp_marker.description is None
 
         with patch.object(
@@ -3341,10 +3338,10 @@ async def test_sensors_step_separates_readonly_discovery_from_explicit_selection
         ) as next_step:
             await flow.async_step_area_sensors(
                 {
-                    AUTO_ADDED_SECTION: {
-                        AUTO_ADDED_ENTITIES_FIELD: "tampered value",
+                    EXPLICIT_SECTION: {
+                        f"{AUTO_ADDED_FIELD_PREFIX}environmental": "tampered value",
+                        CONF_TEMPERATURE_SENSORS: [],
                     },
-                    EXPLICIT_SECTION: {CONF_TEMPERATURE_SENSORS: []},
                 }
             )
 
@@ -3374,11 +3371,9 @@ def test_sensor_sections_format_automatic_and_explicit_entities(
 
     explicit = _explicit_sensor_config(resolved, (CONF_MOTION_SENSORS,))
     assert explicit[CONF_MOTION_SENSORS] == ["binary_sensor.motion_explicit"]
-    assert (
-        _auto_added_sensor_text(flow.hass, resolved, (CONF_MOTION_SENSORS,)).find(
-            "binary_sensor.motion_auto"
-        )
-        >= 0
+    auto_text = _auto_added_sensor_text(flow.hass, resolved, (CONF_MOTION_SENSORS,))
+    assert auto_text == (
+        "Motion & Presence:\n- binary_sensor.motion_auto (binary_sensor.motion_auto)"
     )
 
 
