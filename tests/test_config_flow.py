@@ -37,6 +37,7 @@ from custom_components.area_occupancy.config_flow import (
     _handle_step_error,
     _is_weather_entity,
     _nest_config_for_sections,
+    _sync_discovered_and_excluded,
 )
 from custom_components.area_occupancy.config_helpers import (
     apply_purpose_based_decay_default,
@@ -52,6 +53,7 @@ from custom_components.area_occupancy.const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_ADDED_SENSORS,
     CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
@@ -3173,13 +3175,47 @@ async def test_motion_step_prepopulates_discovered_and_excludes_removed(
             )
 
     next_step.assert_awaited_once()
-    assert flow._area_config_draft[CONF_EXCLUDED_SENSORS] == [
-        "binary_sensor.motion_auto_2"
+    assert CONF_EXCLUDED_SENSORS not in flow._area_config_draft
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == [
+        "binary_sensor.motion_auto_1"
     ]
-    assert flow._area_config_draft[CONF_MOTION_SENSORS] == []
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
+        CONF_MOTION_SENSORS
+    ] == ["binary_sensor.motion_auto_1"]
 
 
-async def test_sensors_step_prepopulates_discovered_and_excludes_removed(
+def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
+    """Changing discovery removes auto-added entities but keeps explicit ones."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+        CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_POWER_SENSORS: ["sensor.powercalc_auto"]
+        },
+    }
+    submitted = {
+        CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"]
+    }
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.discover_area_sensors",
+        return_value={CONF_POWER_SENSORS: []},
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            submitted,
+            (CONF_POWER_SENSORS,),
+        )
+
+    assert synced[CONF_POWER_SENSORS] == ["sensor.explicit_power"]
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {}
+
+
+async def test_sensors_step_prepopulates_discovered_and_tracks_unchecked_entity(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
     flow = config_flow_flow
@@ -3220,8 +3256,13 @@ async def test_sensors_step_prepopulates_discovered_and_excludes_removed(
             )
 
     next_step.assert_awaited_once()
-    assert flow._area_config_draft[CONF_EXCLUDED_SENSORS] == ["sensor.temp_ignore"]
-    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == []
+    assert CONF_EXCLUDED_SENSORS not in flow._area_config_draft
+    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == [
+        "sensor.temp_auto"
+    ]
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
+        CONF_TEMPERATURE_SENSORS
+    ] == ["sensor.temp_auto"]
 
 
 def _register_area_with_motion(

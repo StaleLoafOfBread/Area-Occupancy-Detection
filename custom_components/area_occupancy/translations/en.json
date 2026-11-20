@@ -296,7 +296,7 @@
             },
             "area_motion": {
                 "title": "Motion Sensors — {area_name}",
-                "description": "Configure motion and presence sensors for this area. At least one motion sensor is required.",
+                "description": "Configure motion and presence sensors for this area. At least one motion sensor is required. {provenance_summary}",
                 "data": {
                     "motion_sensors": "Motion/Presence Sensors",
                     "weight_motion": "Motion Weight",
@@ -314,7 +314,7 @@
             },
             "area_sensors": {
                 "title": "Additional Sensors — {area_name}",
-                "description": "Configure doors, windows, media players, appliances, environmental, and power sensors. All sections are optional.",
+                "description": "Configure doors, windows, media players, appliances, environmental, and power sensors. All sections are optional. {provenance_summary}",
                 "sections": {
                     "windows_and_doors": {
                         "name": "Windows, Doors, Locks & Covers",

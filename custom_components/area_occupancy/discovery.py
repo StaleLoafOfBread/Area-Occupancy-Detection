@@ -26,6 +26,7 @@ from .const import (
     CONF_AIR_QUALITY_SENSORS,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_ADDED_SENSORS,
     CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_CO2_SENSORS,
@@ -560,6 +561,17 @@ def resolve_area_sensors(
                 resolved[key] = list(dict.fromkeys(expanded))
 
     global_options = global_options or {}
+    tracked_auto: dict[str, list[str]] = {}
+    raw_tracked_auto = data.get(CONF_AUTO_ADDED_SENSORS)
+    if isinstance(raw_tracked_auto, dict):
+        for key, entity_ids in raw_tracked_auto.items():
+            if key in ALL_AREA_SENSOR_KEYS and isinstance(entity_ids, list):
+                tracked_auto[key] = [
+                    entity_id
+                    for entity_id in entity_ids
+                    if isinstance(entity_id, str)
+                ]
+
     excluded = set(data.get(CONF_EXCLUDED_SENSORS) or [])
     excluded.update(global_options.get(CONF_EXCLUDED_SENSORS) or [])
     if excluded:
@@ -569,14 +581,34 @@ def resolve_area_sensors(
                 resolved[key] = [
                     entity_id for entity_id in existing if entity_id not in excluded
                 ]
+        for key, entity_ids in tracked_auto.items():
+            tracked_auto[key] = [
+                entity_id for entity_id in entity_ids if entity_id not in excluded
+            ]
 
     if not data.get(
         CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS
     ) or not data.get(CONF_AREA_ID):
+        for key in ALL_AREA_SENSOR_KEYS:
+            existing = resolved.get(key)
+            auto_ids = set(tracked_auto.get(key, []))
+            if isinstance(existing, list) and auto_ids:
+                resolved[key] = [
+                    entity_id for entity_id in existing if entity_id not in auto_ids
+                ]
+        resolved[CONF_AUTO_ADDED_SENSORS] = {}
         return resolved
 
     enabled_domains = get_enabled_discovery_domains(data)
     if not enabled_domains:
+        for key in ALL_AREA_SENSOR_KEYS:
+            existing = resolved.get(key)
+            auto_ids = set(tracked_auto.get(key, []))
+            if isinstance(existing, list) and auto_ids:
+                resolved[key] = [
+                    entity_id for entity_id in existing if entity_id not in auto_ids
+                ]
+        resolved[CONF_AUTO_ADDED_SENSORS] = {}
         return resolved
 
     manual = {
@@ -594,6 +626,20 @@ def resolve_area_sensors(
         excluded_entities=excluded,
         global_options=global_options,
     )
+    for key in ALL_AREA_SENSOR_KEYS:
+        existing = resolved.get(key)
+        if not isinstance(existing, list):
+            continue
+        eligible_ids = set(discovered.get(key, []))
+        stale_auto_ids = set(tracked_auto.get(key, [])) - eligible_ids
+        if stale_auto_ids:
+            resolved[key] = [
+                entity_id
+                for entity_id in existing
+                if entity_id not in stale_auto_ids
+            ]
+
+    resolved_auto: dict[str, list[str]] = {}
     for key, entity_ids in discovered.items():
         additions = [
             entity_id
@@ -602,6 +648,22 @@ def resolve_area_sensors(
         ]
         if additions:
             resolved[key] = [*resolved.get(key, []), *additions]
+        previously_auto = tracked_auto.get(key, [])
+        resolved_auto[key] = list(
+            dict.fromkeys(
+                [
+                    entity_id
+                    for entity_id in (*previously_auto, *additions)
+                    if entity_id in eligible_discovered
+                ]
+            )
+        ) if (eligible_discovered := set(entity_ids)) else []
+
+    resolved[CONF_AUTO_ADDED_SENSORS] = {
+        key: entity_ids
+        for key, entity_ids in resolved_auto.items()
+        if entity_ids
+    }
 
     return resolved
 

@@ -90,6 +90,7 @@ CONF_ADJACENT_AREAS: Final = (
 )
 CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
 CONF_AUTO_DISCOVER_DOMAINS: Final = "auto_discover_domains"
+CONF_AUTO_ADDED_SENSORS: Final = "auto_added_sensors"
 CONF_EXCLUDED_INTEGRATIONS: Final = "excluded_integrations"
 CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
 CONF_EXCLUDE_LIGHT_POWER: Final = "exclude_light_power"

@@ -93,6 +93,7 @@ from .const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_ADDED_SENSORS,
     CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
@@ -1731,61 +1732,73 @@ def _sync_discovered_and_excluded(
     sensor_keys: tuple[str, ...],
     global_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Sync form sensor selections with auto-discovered and excluded sensors."""
+    """Sync sensor selections while preserving auto-added provenance."""
     updated = dict(submitted)
-    if not hass or not draft.get(
+    raw_auto = draft.get(CONF_AUTO_ADDED_SENSORS)
+    tracked_auto: dict[str, list[str]] = {}
+    if isinstance(raw_auto, dict):
+        for key, entity_ids in raw_auto.items():
+            if isinstance(entity_ids, list):
+                tracked_auto[key] = [
+                    entity_id
+                    for entity_id in entity_ids
+                    if isinstance(entity_id, str)
+                ]
+
+    if not hass:
+        updated[CONF_AUTO_ADDED_SENSORS] = tracked_auto
+        return updated
+
+    discovered: dict[str, list[str]] = {}
+    if draft.get(
         CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS
-    ):
-        return updated
+    ) and draft.get(CONF_AREA_ID):
+        enabled_domains = get_enabled_discovery_domains(draft)
+        if enabled_domains:
+            discovered = discover_area_sensors(
+                hass,
+                draft[CONF_AREA_ID],
+                expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+                enabled_domains=enabled_domains,
+                excluded_platforms=draft.get(CONF_EXCLUDED_INTEGRATIONS),
+                exclude_light_power=draft.get(
+                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
+                ),
+                excluded_entities=[
+                    *(draft.get(CONF_EXCLUDED_SENSORS) or []),
+                    *((global_options or {}).get(CONF_EXCLUDED_SENSORS) or []),
+                ],
+                global_options=global_options,
+            )
 
-    area_id = draft.get(CONF_AREA_ID)
-    if not area_id:
-        return updated
-
-    enabled_domains = get_enabled_discovery_domains(draft)
-    discovered = discover_area_sensors(
-        hass,
-        area_id,
-        expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
-        enabled_domains=enabled_domains,
-        excluded_platforms=draft.get(CONF_EXCLUDED_INTEGRATIONS),
-        exclude_light_power=draft.get(
-            CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
-        ),
-        excluded_entities=[
-            *(draft.get(CONF_EXCLUDED_SENSORS) or []),
-            *((global_options or {}).get(CONF_EXCLUDED_SENSORS) or []),
-        ],
-        global_options=global_options,
-    )
-    excluded: list[str] = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
-    excluded_changed = False
-
+    updated_auto: dict[str, list[str]] = {}
     for key in sensor_keys:
         if key not in updated:
             continue
         chosen = list(updated.get(key) or [])
-        chosen_set = set(chosen)
         disc_for_key = discovered.get(key, [])
-        disc_set = set(disc_for_key)
+        previous_auto = set(tracked_auto.get(key, []))
+        raw_explicit = set(draft.get(key) or []) - previous_auto
 
-        for entity_id in disc_for_key:
-            if entity_id not in chosen_set and entity_id not in excluded:
-                excluded.append(entity_id)
-                excluded_changed = True
+        eligible = set(disc_for_key)
+        auto_ids: list[str] = []
+        explicit_ids: list[str] = []
+        for entity_id in dict.fromkeys(chosen):
+            if entity_id in previous_auto:
+                if entity_id in eligible:
+                    auto_ids.append(entity_id)
+                else:
+                    continue
+            elif entity_id in eligible and entity_id not in raw_explicit:
+                auto_ids.append(entity_id)
+            else:
+                explicit_ids.append(entity_id)
 
-        for entity_id in chosen:
-            if entity_id in excluded:
-                excluded.remove(entity_id)
-                excluded_changed = True
+        updated[key] = list(dict.fromkeys([*explicit_ids, *auto_ids]))
+        if auto_ids:
+            updated_auto[key] = auto_ids
 
-        if disc_set:
-            updated[key] = [
-                entity_id for entity_id in chosen if entity_id not in disc_set
-            ]
-
-    if excluded_changed or CONF_EXCLUDED_SENSORS in draft:
-        updated[CONF_EXCLUDED_SENSORS] = excluded
+    updated[CONF_AUTO_ADDED_SENSORS] = updated_auto
     return updated
 
 
@@ -2311,7 +2324,33 @@ class BaseOccupancyFlow:
         if area_id:
             with contextlib.suppress(ValueError):
                 area_name = _resolve_area_id_to_name(self.hass, area_id)
-        return {"area_name": area_name}
+        resolved = self._resolve_area_sensors(self._area_config_draft)
+        tracked_auto = resolved.get(CONF_AUTO_ADDED_SENSORS)
+        auto_ids = [
+            entity_id
+            for entity_ids in (
+                tracked_auto.values() if isinstance(tracked_auto, dict) else ()
+            )
+            for entity_id in entity_ids
+        ]
+        if auto_ids:
+            labels = []
+            for entity_id in dict.fromkeys(auto_ids):
+                state = self.hass.states.get(entity_id)
+                labels.append(state.name if state and state.name else entity_id)
+            provenance_summary = (
+                "Auto-added sensors: "
+                + ", ".join(labels)
+                + ". All other selections are explicit."
+            )
+        else:
+            provenance_summary = (
+                "No sensors are currently auto-added; selections here are explicit."
+            )
+        return {
+            "area_name": area_name,
+            "provenance_summary": provenance_summary,
+        }
 
     # ── Persisting an area ───────────────────────────────────────────
 

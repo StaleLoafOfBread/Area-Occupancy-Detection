@@ -10,6 +10,7 @@ import pytest
 
 from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
+    CONF_AUTO_ADDED_SENSORS,
     CONF_AUTO_DISCOVER_DOMAINS,
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_DOOR_SENSORS,
@@ -923,6 +924,32 @@ def test_excluded_integrations_skips_auto_add_and_groups() -> None:
     assert auto_only[CONF_TEMPERATURE_SENSORS] == ["sensor.real_temp"]
     assert CONF_POWER_SENSORS not in auto_only
     assert with_manual[CONF_POWER_SENSORS] == ["sensor.powercalc_watt"]
+
+
+def test_auto_added_provenance_removed_but_explicit_selection_kept() -> None:
+    """An integration exclusion removes only entities that discovery added."""
+    hass = Mock()
+    hass.states = Mock()
+    hass.states.get = Mock(return_value=None)
+
+    data = {
+        CONF_AREA_ID: "office",
+        CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
+        CONF_EXPAND_GROUPS: False,
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_POWER_SENSORS: ["sensor.powercalc_auto"]
+        },
+        CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+    }
+
+    with patch(
+        "custom_components.area_occupancy.discovery.discover_area_sensors",
+        return_value={},
+    ):
+        resolved = resolve_area_sensors(hass, data)
+
+    assert resolved[CONF_POWER_SENSORS] == ["sensor.explicit_power"]
+    assert resolved[CONF_AUTO_ADDED_SENSORS] == {}
 
 
 def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
