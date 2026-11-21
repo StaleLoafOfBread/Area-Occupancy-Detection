@@ -40,6 +40,7 @@ from .const import (
     CONF_EXCLUDE_LIGHT_POWER,
     CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
+    CONF_EXCLUDED_SENSOR_TYPES,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
     CONF_HUMIDITY_SENSORS,
@@ -128,6 +129,42 @@ ALL_AREA_SENSOR_KEYS: Final[tuple[str, ...]] = (
     CONF_APPLIANCES,
     CONF_WIFI_CLIENTS_SENSORS,
 )
+_SENSOR_KEY_TYPES: Final[dict[str, str]] = {
+    CONF_MOTION_SENSORS: "motion",
+    CONF_DOOR_SENSORS: "door",
+    CONF_WINDOW_SENSORS: "window",
+    CONF_LOCK_SENSORS: "lock",
+    CONF_COVER_SENSORS: "cover",
+    CONF_MEDIA_DEVICES: "media",
+    CONF_APPLIANCES: "appliance",
+    CONF_TEMPERATURE_SENSORS: "temperature",
+    CONF_HUMIDITY_SENSORS: "humidity",
+    CONF_ILLUMINANCE_SENSORS: "illuminance",
+    CONF_CO2_SENSORS: "co2",
+    CONF_CO_SENSORS: "co",
+    CONF_SOUND_PRESSURE_SENSORS: "sound_pressure",
+    CONF_PRESSURE_SENSORS: "pressure",
+    CONF_AIR_QUALITY_SENSORS: "air_quality",
+    CONF_VOC_SENSORS: "voc",
+    CONF_PM25_SENSORS: "pm25",
+    CONF_PM10_SENSORS: "pm10",
+    CONF_POWER_SENSORS: "power",
+    CONF_WIFI_CLIENTS_SENSORS: "wifi_clients",
+    CONF_CUSTOM_BINARY_SENSORS: "custom_binary",
+    CONF_CUSTOM_NUMERIC_SENSORS: "custom_numeric",
+}
+
+
+def _excluded_sensor_keys(excluded_types: Collection[str]) -> set[str]:
+    """Return area config keys covered by global sensor type exclusions."""
+    normalized = {item for item in excluded_types if isinstance(item, str)}
+    return {
+        key
+        for key, sensor_type in _SENSOR_KEY_TYPES.items()
+        if sensor_type in normalized
+    }
+
+
 _KEY_EXPECTED_DOMAINS: Final[dict[str, str]] = {
     CONF_MOTION_SENSORS: "binary_sensor",
     CONF_DOOR_SENSORS: "binary_sensor",
@@ -622,7 +659,14 @@ def discover_area_sensors(
             if entry.entity_id not in target:
                 target.append(entry.entity_id)
 
-    return discovered
+    excluded_type_keys = _excluded_sensor_keys(
+        global_options.get(CONF_EXCLUDED_SENSOR_TYPES) or ()
+    )
+    return {
+        key: entities
+        for key, entities in discovered.items()
+        if key not in excluded_type_keys
+    }
 
 
 def resolve_area_sensors(
@@ -661,11 +705,21 @@ def resolve_area_sensors(
                         expanded.append(entity_id)
                 resolved[key] = list(dict.fromkeys(expanded))
 
+    excluded_type_keys = _excluded_sensor_keys(
+        global_options.get(CONF_EXCLUDED_SENSOR_TYPES) or ()
+    )
+    for key in excluded_type_keys:
+        resolved.pop(key, None)
+
     tracked_auto: dict[str, list[str]] = {}
     raw_tracked_auto = data.get(CONF_AUTO_ADDED_SENSORS)
     if isinstance(raw_tracked_auto, dict):
         for key, entity_ids in raw_tracked_auto.items():
-            if key in ALL_AREA_SENSOR_KEYS and isinstance(entity_ids, list):
+            if (
+                key in ALL_AREA_SENSOR_KEYS
+                and key not in excluded_type_keys
+                and isinstance(entity_ids, list)
+            ):
                 tracked_auto[key] = [
                     entity_id for entity_id in entity_ids if isinstance(entity_id, str)
                 ]

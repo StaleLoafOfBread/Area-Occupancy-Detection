@@ -96,13 +96,6 @@
                         "name": "Windows, Doors, Locks & Covers",
                         "description": "Configure door, window, lock, and cover sensors and their states",
                         "data": {
-                            "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
-                            "auto_added_media": "Auto-added — media players",
-                            "auto_added_appliances": "Auto-added — appliances",
-                            "auto_added_environmental": "Auto-added — environmental sensors",
-                            "auto_added_power": "Auto-added — power sensors",
-                            "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
-                            "auto_added_custom": "Auto-added — custom sensors",
                             "door_sensors": "Door Sensors",
                             "door_active_state": "Door Active State",
                             "weight_door": "Door Weight",
@@ -117,13 +110,6 @@
                             "weight_cover": "Cover Weight"
                         },
                         "data_description": {
-                            "auto_added_windows_and_doors": "Entities automatically added by discovery for doors, windows, locks, and covers.",
-                            "auto_added_media": "Entities automatically added by discovery for media players.",
-                            "auto_added_appliances": "Entities automatically added by discovery for appliances.",
-                            "auto_added_environmental": "Entities automatically added by discovery for environmental sensors.",
-                            "auto_added_power": "Entities automatically added by discovery for power sensors.",
-                            "auto_added_wifi_clients": "Entities automatically added by discovery for Wi-Fi client sensors.",
-                            "auto_added_custom": "Entities automatically added by discovery for custom sensors.",
                             "door_active_state": "This is the state of the door that will be used to detect occupancy.",
                             "weight_door": "The weight given to door sensor inputs in the occupancy calculation.",
                             "lock_active_state": "This is the state of the lock that will be used to detect occupancy.",
@@ -280,24 +266,32 @@
                     "purpose": "Area Purpose",
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
-                    "expand_groups": "Group expansion",
-                    "exclude_light_power": "Light-derived power sensor handling",
-                    "excluded_device_matches": "Exclude devices by manufacturer or model",
-                    "excluded_sensors": "Exclude from automatic discovery",
-                    "excluded_integrations": "Integrations to exclude from automatic discovery"
+                    "expand_groups": "Group expansion"
                 },
                 "data_description": {
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
-                    "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
-                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
+                    "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups."
                 },
                 "sections": {
+                    "area_exclusions": {
+                        "name": "Exclusions for this area only",
+                        "description": "These rules affect this area. Global exclusions still apply everywhere and cannot be overridden here.",
+                        "data": {
+                            "exclude_light_power": "Light-derived power sensor handling for this area",
+                            "excluded_device_matches": "Devices to exclude in this area",
+                            "excluded_sensors": "Entities to exclude in this area",
+                            "excluded_integrations": "Integrations to omit from discovery in this area"
+                        },
+                        "data_description": {
+                            "exclude_light_power": "Follow Global uses the global default. Exclude or Include changes automatic discovery for this area only.",
+                            "excluded_device_matches": "Match manufacturer or model text for devices in this area. Global device exclusions also apply and cannot be overridden.",
+                            "excluded_sensors": "Block these entities in this area. Global entity and sensor-type exclusions still apply here.",
+                            "excluded_integrations": "Omit these integrations from automatic discovery in this area. Global exclusions also apply; manually selected entities are allowed unless blocked by an entity or sensor-type exclusion."
+                        }
+                    },
                     "auto_discovery_types": {
                         "name": "Sensor types to auto-discover",
                         "description": "Choose which sensor types are automatically discovered for this area. All types are enabled by default.",
@@ -345,22 +339,19 @@
             },
             "area_sensors": {
                 "title": "Additional Sensors — {area_name}",
-                "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                 "sections": {
-                    "auto_added": {
-                        "name": "Auto-added (read-only)",
-                        "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                        "data": {
-                            "auto_added_entities": "Auto-added sensors"
-                        },
-                        "data_description": {
-                            "auto_added_entities": "Entities automatically added by discovery. This field is read-only."
-                        }
-                    },
                     "explicit": {
-                        "name": "Explicitly selected",
-                        "description": "These selections are editable and are kept when discovery settings change.",
+                        "name": "Sensors",
+                        "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                         "data": {
+                            "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                            "auto_added_media": "Auto-added — media players",
+                            "auto_added_appliances": "Auto-added — appliances",
+                            "auto_added_environmental": "Auto-added — environmental sensors",
+                            "auto_added_power": "Auto-added — power sensors",
+                            "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                            "auto_added_custom": "Auto-added — custom sensors",
                             "door_sensors": "Door Sensors",
                             "door_active_state": "Door Active State",
                             "weight_door": "Door Weight",
@@ -398,12 +389,16 @@
                             "custom_binary_sensors": "Custom Binary Sensors",
                             "custom_binary_active_states": "Custom Binary Active States",
                             "weight_custom_binary": "Custom Binary Weight",
-                            "custom_numeric_sensors": "Custom Numeric Sensors",
-                            "custom_numeric_active_min": "Custom Numeric Active Minimum",
-                            "custom_numeric_active_max": "Custom Numeric Active Maximum",
-                            "weight_custom_numeric": "Custom Numeric Weight"
+                            "custom_numeric_sensors": "Custom Numeric Sensors"
                         },
                         "data_description": {
+                            "auto_added_windows_and_doors": "Entities automatically added by discovery for doors, windows, locks, and covers.",
+                            "auto_added_media": "Entities automatically added by discovery for media players.",
+                            "auto_added_appliances": "Entities automatically added by discovery for appliances.",
+                            "auto_added_environmental": "Entities automatically added by discovery for environmental sensors.",
+                            "auto_added_power": "Entities automatically added by discovery for power sensors.",
+                            "auto_added_wifi_clients": "Entities automatically added by discovery for Wi-Fi client sensors.",
+                            "auto_added_custom": "Entities automatically added by discovery for custom sensors.",
                             "door_active_state": "This is the state of the door that will be used to detect occupancy.",
                             "weight_door": "The weight given to door sensor inputs in the occupancy calculation.",
                             "lock_active_state": "This is the state of the lock that will be used to detect occupancy.",
@@ -520,20 +515,12 @@
                     "purpose": "Area Purpose",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Group expansion",
-                    "exclude_light_power": "Light-derived power sensor handling",
-                    "excluded_device_matches": "Exclude devices by manufacturer or model",
-                    "excluded_sensors": "Exclude from automatic discovery",
-                    "excluded_integrations": "Integrations to exclude from automatic discovery",
                     "adjacent_areas": "Adjacent Areas"
                 },
                 "data_description": {
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
-                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet."
                 },
                 "sections": {
@@ -545,6 +532,22 @@
                         },
                         "data_description": {
                             "auto_discover_domains": "Only checked sensor types are automatically included. Manually selected sensors are still allowed for unchecked types."
+                        }
+                    },
+                    "area_exclusions": {
+                        "name": "Exclusions for this area only",
+                        "description": "These rules affect this area. Global exclusions still apply everywhere and cannot be overridden here.",
+                        "data": {
+                            "exclude_light_power": "Light-derived power sensor handling for this area",
+                            "excluded_device_matches": "Devices to exclude in this area",
+                            "excluded_sensors": "Entities to exclude in this area",
+                            "excluded_integrations": "Integrations to omit from discovery in this area"
+                        },
+                        "data_description": {
+                            "exclude_light_power": "Follow Global uses the global default. Exclude or Include changes automatic discovery for this area only.",
+                            "excluded_device_matches": "Match manufacturer or model text for devices in this area. Global device exclusions also apply and cannot be overridden.",
+                            "excluded_sensors": "Block these entities in this area. Global entity and sensor-type exclusions still apply here.",
+                            "excluded_integrations": "Omit these integrations from automatic discovery in this area. Global exclusions also apply; manually selected entities are allowed unless blocked by an entity or sensor-type exclusion."
                         }
                     }
                 }
@@ -569,12 +572,12 @@
             "custom_binary_states_required": "Custom binary active states are required when custom binary sensors are configured.",
             "custom_numeric_range_invalid": "Custom numeric active minimum must be less than the active maximum.",
             "person_entity_required": "A person entity is required.",
-            "person_already_configured": "This person is already configured.",
             "sleep_sensor_required": "At least one sleep sensor is required.",
             "sleep_area_required": "A sleep area is required.",
             "confidence_not_number": "Confidence threshold must be a number.",
             "invalid_selection": "Invalid selection. Please try again.",
-            "unknown": "An unexpected error occurred."
+            "unknown": "An unexpected error occurred.",
+            "person_already_configured": "This person is already configured."
         }
     },
     "options": {
@@ -836,22 +839,14 @@
                     "purpose": "Area Purpose",
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
-                    "expand_groups": "Group expansion",
-                    "exclude_light_power": "Light-derived power sensor handling",
-                    "excluded_device_matches": "Exclude devices by manufacturer or model",
-                    "excluded_sensors": "Exclude from automatic discovery",
-                    "excluded_integrations": "Integrations to exclude from automatic discovery"
+                    "expand_groups": "Group expansion"
                 },
                 "data_description": {
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
-                    "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
-                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
+                    "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups."
                 },
                 "sections": {
                     "auto_discovery_types": {
@@ -862,6 +857,22 @@
                         },
                         "data_description": {
                             "auto_discover_domains": "Only checked sensor types are automatically included. Manually selected sensors are still allowed for unchecked types."
+                        }
+                    },
+                    "area_exclusions": {
+                        "name": "Exclusions for this area only",
+                        "description": "These rules affect this area. Global exclusions still apply everywhere and cannot be overridden here.",
+                        "data": {
+                            "exclude_light_power": "Light-derived power sensor handling for this area",
+                            "excluded_device_matches": "Devices to exclude in this area",
+                            "excluded_sensors": "Entities to exclude in this area",
+                            "excluded_integrations": "Integrations to omit from discovery in this area"
+                        },
+                        "data_description": {
+                            "exclude_light_power": "Follow Global uses the global default. Exclude or Include changes automatic discovery for this area only.",
+                            "excluded_device_matches": "Match manufacturer or model text for devices in this area. Global device exclusions also apply and cannot be overridden.",
+                            "excluded_sensors": "Block these entities in this area. Global entity and sensor-type exclusions still apply here.",
+                            "excluded_integrations": "Omit these integrations from automatic discovery in this area. Global exclusions also apply; manually selected entities are allowed unless blocked by an entity or sensor-type exclusion."
                         }
                     }
                 }
@@ -901,22 +912,19 @@
             },
             "area_sensors": {
                 "title": "Additional Sensors — {area_name}",
-                "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                 "sections": {
-                    "auto_added": {
-                        "name": "Auto-added (read-only)",
-                        "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                        "data": {
-                            "auto_added_entities": "Auto-added sensors"
-                        },
-                        "data_description": {
-                            "auto_added_entities": "Entities automatically added by discovery. This field is read-only."
-                        }
-                    },
                     "explicit": {
-                        "name": "Explicitly selected",
-                        "description": "These selections are editable and are kept when discovery settings change.",
+                        "name": "Sensors",
+                        "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                         "data": {
+                            "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                            "auto_added_media": "Auto-added — media players",
+                            "auto_added_appliances": "Auto-added — appliances",
+                            "auto_added_environmental": "Auto-added — environmental sensors",
+                            "auto_added_power": "Auto-added — power sensors",
+                            "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                            "auto_added_custom": "Auto-added — custom sensors",
                             "door_sensors": "Door Sensors",
                             "door_active_state": "Door Active State",
                             "weight_door": "Door Weight",
@@ -1099,38 +1107,52 @@
             },
             "global_exclusions": {
                 "title": "Global Exclusions",
-                "description": "Global entity and device exclusions remove matching sensors from every area. Global integration exclusions apply to automatic discovery everywhere; manual selections remain allowed. Each area can follow or override the global light-power setting.",
-                "data": {
-                    "exclude_light_power": "Exclude light-derived power sensors by default",
-                    "excluded_device_matches": "Device manufacturer/model text to exclude everywhere",
-                    "excluded_sensors": "Entities excluded from occupancy detection everywhere",
-                    "excluded_integrations": "Integrations excluded from discovery everywhere"
-                },
-                "data_description": {
-                    "exclude_light_power": "Off by default. Sets the default for areas set to Follow Global. An area's explicit Exclude or Include choice overrides it. This affects automatic discovery only; manually selected sensors are not removed.",
-                    "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model across every area. Matching entities are ignored even if previously selected.",
-                    "excluded_sensors": "Select entities to always ignore in occupancy detection across every area. Area settings cannot override this, and matching saved sensor selections are removed.",
-                    "excluded_integrations": "Select integrations or source domains to omit from automatic discovery in every area. This does not block manually selected entities; use the entity exclusion setting for those."
-                }
-            },
-            "global_exclusions_entities": {
-                "title": "Global Entity Exclusions",
-                "description": "Select entities to always ignore in occupancy detection across every area.",
-                "data": {
-                    "excluded_sensors": "Entities excluded from occupancy detection everywhere"
-                },
-                "data_description": {
-                    "excluded_sensors": "Area settings cannot override this, and matching saved sensor selections are removed."
-                }
-            },
-            "global_exclusions_integrations": {
-                "title": "Global Integration Exclusions",
-                "description": "Choose integrations omitted from automatic discovery in every area.",
-                "data": {
-                    "excluded_integrations": "Integrations excluded from discovery everywhere"
-                },
-                "data_description": {
-                    "excluded_integrations": "This does not block manually selected entities; use the entity exclusion step for those."
+                "description": "Global rules apply across all areas. Area-specific exclusions are in each area’s Basics settings; they add local rules but cannot undo a global exclusion.",
+                "data": {},
+                "data_description": {},
+                "sections": {
+                    "sensor_types": {
+                        "name": "Sensor types excluded everywhere",
+                        "description": "Choose types to block across every area, including manual selections.",
+                        "data": {
+                            "excluded_sensor_types": "Sensor types to exclude"
+                        },
+                        "data_description": {
+                            "excluded_sensor_types": "All sensors of these types are ignored in every area. Area settings cannot override this."
+                        }
+                    },
+                    "devices": {
+                        "name": "Devices and light-derived power",
+                        "description": "Rules that apply across every area.",
+                        "data": {
+                            "exclude_light_power": "Exclude light-derived power sensors by default",
+                            "excluded_device_matches": "Devices excluded by manufacturer or model"
+                        },
+                        "data_description": {
+                            "exclude_light_power": "Sets the default for areas set to Follow Global. An area can choose Include or Exclude for automatic discovery in that area.",
+                            "excluded_device_matches": "Match manufacturer or model text across every area. Matching entities are ignored even if previously selected; area settings cannot override this."
+                        }
+                    },
+                    "entities": {
+                        "name": "Entities excluded everywhere",
+                        "description": "Block specific entities from occupancy detection in every area.",
+                        "data": {
+                            "excluded_sensors": "Entities to exclude"
+                        },
+                        "data_description": {
+                            "excluded_sensors": "Matching entities are removed even if previously selected. Area settings cannot override this."
+                        }
+                    },
+                    "integrations": {
+                        "name": "Integrations excluded from discovery",
+                        "description": "Skip integrations or source domains during automatic discovery across every area.",
+                        "data": {
+                            "excluded_integrations": "Integrations to omit from automatic discovery"
+                        },
+                        "data_description": {
+                            "excluded_integrations": "This affects automatic discovery only. Use a global entity or sensor-type exclusion to block manual selections too."
+                        }
+                    }
                 }
             },
             "manage_people": {
@@ -1195,12 +1217,12 @@
             "custom_binary_states_required": "Custom binary active states are required when custom binary sensors are configured.",
             "custom_numeric_range_invalid": "Custom numeric active minimum must be less than the active maximum.",
             "person_entity_required": "A person entity is required.",
-            "person_already_configured": "This person is already configured.",
             "sleep_sensor_required": "At least one sleep sensor is required.",
             "sleep_area_required": "A sleep area is required.",
             "confidence_not_number": "Confidence threshold must be a number.",
             "invalid_selection": "Invalid selection. Please try again.",
-            "unknown": "An unexpected error occurred."
+            "unknown": "An unexpected error occurred.",
+            "person_already_configured": "This person is already configured."
         }
     },
     "entity": {
@@ -1262,70 +1284,6 @@
         "number": {
             "threshold": {
                 "name": "Occupancy Threshold"
-            }
-        }
-    },
-    "services": {
-        "run_analysis": {
-            "name": "Run Analysis",
-            "description": "Run the analysis for all areas in the area occupancy instance."
-        },
-        "export_config": {
-            "name": "Export Config",
-            "description": "Export the complete integration configuration as YAML."
-        },
-        "purge_area_history": {
-            "name": "Purge Area History",
-            "description": "Delete all learned history for a single configured area (priors, correlations, intervals, aggregates, cached occupied intervals) without removing the area from the integration. Use this when a room's learned behavior is no longer accurate and you want the integration to re-learn from scratch.",
-            "fields": {
-                "area_id": {
-                    "name": "Area",
-                    "description": "The Home Assistant area whose learned history should be purged."
-                }
-            }
-        },
-        "get_time_priors": {
-            "name": "Get Time Priors",
-            "description": "Return the learned weekly occupancy-prior forecast for each area: for every weekly slot (day of week x time of day) the probability that the area tends to be occupied. Unlike the occupancy probability sensor (a current-state estimate), this exposes priors for future slots so other integrations can build a forward-looking occupancy profile, for example to pre-heat a room before its habitual occupancy. Returns response data only.",
-            "fields": {
-                "area_id": {
-                    "name": "Area",
-                    "description": "Optional Home Assistant area. When omitted, the forecast for all configured areas is returned. The aggregate zone ids (all_areas and floor_[floor_id]) are also accepted, but the area picker only lists real Home Assistant areas — pass an aggregate id in YAML mode."
-                }
-            }
-        },
-        "set_area_option": {
-            "name": "Set Area Option",
-            "description": "Change one configured area's detection tunables from an automation or script. Values go through the same validation and purpose-default handling the configuration UI applies, so an automation cannot put an area into a state the UI would reject. Structural configuration (which entities belong to an area, adjacent areas) is deliberately not settable here.",
-            "fields": {
-                "area_id": {
-                    "name": "Area",
-                    "description": "The Home Assistant area_id of the configured area to change."
-                },
-                "threshold": {
-                    "name": "Occupancy threshold",
-                    "description": "Percentage above which the area counts as occupied."
-                },
-                "decay_enabled": {
-                    "name": "Enable time decay",
-                    "description": "Whether occupancy probability decays once evidence stops."
-                },
-                "decay_half_life": {
-                    "name": "Decay half-life",
-                    "description": "Time over which occupancy probability halves. Set to 0 to follow the area's purpose default; any other value must be between 10 seconds and 1 hour."
-                },
-                "min_prior_override": {
-                    "name": "Minimum prior override",
-                    "description": "Floor for the learned prior, from 0 to 1. Set to 0 to disable."
-                },
-                "wasp_enabled": {
-                    "name": "Enable Wasp in Box",
-                    "description": "Whether the Wasp in Box virtual sensor runs for this area."
-                },
-                "closed_door_hold": {
-                    "name": "Closed door means still occupied",
-                    "description": "Whether the area stays occupied while its doors stay closed after motion."
-                }
             }
         }
     },
@@ -1405,22 +1363,14 @@
                         "purpose": "Area Purpose",
                         "adjacent_areas": "Adjacent Areas",
                         "auto_discover_sensors": "Automatically discover sensors",
-                        "expand_groups": "Group expansion",
-                        "exclude_light_power": "Light-derived power sensor handling",
-                        "excluded_device_matches": "Exclude devices by manufacturer or model",
-                        "excluded_sensors": "Exclude from automatic discovery",
-                        "excluded_integrations": "Integrations to exclude from automatic discovery"
+                        "expand_groups": "Group expansion"
                     },
                     "data_description": {
                         "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
                         "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                         "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                         "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
-                        "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                        "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
-                        "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
-                        "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
-                        "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
+                        "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups."
                     },
                     "sections": {
                         "auto_discovery_types": {
@@ -1431,6 +1381,22 @@
                             },
                             "data_description": {
                                 "auto_discover_domains": "Only checked sensor types are automatically included. Manually selected sensors are still allowed for unchecked types."
+                            }
+                        },
+                        "area_exclusions": {
+                            "name": "Exclusions for this area only",
+                            "description": "These rules affect this area. Global exclusions still apply everywhere and cannot be overridden here.",
+                            "data": {
+                                "exclude_light_power": "Light-derived power sensor handling for this area",
+                                "excluded_device_matches": "Devices to exclude in this area",
+                                "excluded_sensors": "Entities to exclude in this area",
+                                "excluded_integrations": "Integrations to omit from discovery in this area"
+                            },
+                            "data_description": {
+                                "exclude_light_power": "Follow Global uses the global default. Exclude or Include changes automatic discovery for this area only.",
+                                "excluded_device_matches": "Match manufacturer or model text for devices in this area. Global device exclusions also apply and cannot be overridden.",
+                                "excluded_sensors": "Block these entities in this area. Global entity and sensor-type exclusions still apply here.",
+                                "excluded_integrations": "Omit these integrations from automatic discovery in this area. Global exclusions also apply; manually selected entities are allowed unless blocked by an entity or sensor-type exclusion."
                             }
                         }
                     }
@@ -1470,19 +1436,19 @@
                 },
                 "area_sensors": {
                     "title": "Additional Sensors — {area_name}",
-                    "description": "Configure optional sensors for this area. Auto-added sensors are read-only; explicit selections are editable.",
+                    "description": "Configure optional sensors for this area. Read-only auto-added sensors appear alongside their related sensor group.",
                     "sections": {
-                        "auto_added": {
-                            "name": "Auto-added (read-only)",
-                            "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
-                            "data": {
-                                "auto_added_entities": "Auto-added sensors"
-                            }
-                        },
                         "explicit": {
-                            "name": "Explicitly selected",
-                            "description": "These selections are editable and are kept when discovery settings change.",
+                            "name": "Sensors",
+                            "description": "Explicit selections are editable and kept when discovery settings change. Auto-added sensors are read-only.",
                             "data": {
+                                "auto_added_windows_and_doors": "Auto-added — doors, windows, locks, and covers",
+                                "auto_added_media": "Auto-added — media players",
+                                "auto_added_appliances": "Auto-added — appliances",
+                                "auto_added_environmental": "Auto-added — environmental sensors",
+                                "auto_added_power": "Auto-added — power sensors",
+                                "auto_added_wifi_clients": "Auto-added — Wi-Fi client sensors",
+                                "auto_added_custom": "Auto-added — custom sensors",
                                 "door_sensors": "Door Sensors",
                                 "door_active_state": "Door Active State",
                                 "weight_door": "Door Weight",
@@ -1651,6 +1617,70 @@
             "abort": {
                 "area_required": "Select a Home Assistant area first.",
                 "area_already_configured": "That area is already configured."
+            }
+        }
+    },
+    "services": {
+        "run_analysis": {
+            "name": "Run Analysis",
+            "description": "Run the analysis for all areas in the area occupancy instance."
+        },
+        "export_config": {
+            "name": "Export Config",
+            "description": "Export the complete integration configuration as YAML."
+        },
+        "purge_area_history": {
+            "name": "Purge Area History",
+            "description": "Delete all learned history for a single configured area (priors, correlations, intervals, aggregates, cached occupied intervals) without removing the area from the integration. Use this when a room's learned behavior is no longer accurate and you want the integration to re-learn from scratch.",
+            "fields": {
+                "area_id": {
+                    "name": "Area",
+                    "description": "The Home Assistant area whose learned history should be purged."
+                }
+            }
+        },
+        "get_time_priors": {
+            "name": "Get Time Priors",
+            "description": "Return the learned weekly occupancy-prior forecast for each area: for every weekly slot (day of week x time of day) the probability that the area tends to be occupied. Unlike the occupancy probability sensor (a current-state estimate), this exposes priors for future slots so other integrations can build a forward-looking occupancy profile, for example to pre-heat a room before its habitual occupancy. Returns response data only.",
+            "fields": {
+                "area_id": {
+                    "name": "Area",
+                    "description": "Optional Home Assistant area. When omitted, the forecast for all configured areas is returned. The aggregate zone ids (all_areas and floor_[floor_id]) are also accepted, but the area picker only lists real Home Assistant areas — pass an aggregate id in YAML mode."
+                }
+            }
+        },
+        "set_area_option": {
+            "name": "Set Area Option",
+            "description": "Change one configured area's detection tunables from an automation or script. Values go through the same validation and purpose-default handling the configuration UI applies, so an automation cannot put an area into a state the UI would reject. Structural configuration (which entities belong to an area, adjacent areas) is deliberately not settable here.",
+            "fields": {
+                "area_id": {
+                    "name": "Area",
+                    "description": "The Home Assistant area_id of the configured area to change."
+                },
+                "threshold": {
+                    "name": "Occupancy threshold",
+                    "description": "Percentage above which the area counts as occupied."
+                },
+                "decay_enabled": {
+                    "name": "Enable time decay",
+                    "description": "Whether occupancy probability decays once evidence stops."
+                },
+                "decay_half_life": {
+                    "name": "Decay half-life",
+                    "description": "Time over which occupancy probability halves. Set to 0 to follow the area's purpose default; any other value must be between 10 seconds and 1 hour."
+                },
+                "min_prior_override": {
+                    "name": "Minimum prior override",
+                    "description": "Floor for the learned prior, from 0 to 1. Set to 0 to disable."
+                },
+                "wasp_enabled": {
+                    "name": "Enable Wasp in Box",
+                    "description": "Whether the Wasp in Box virtual sensor runs for this area."
+                },
+                "closed_door_hold": {
+                    "name": "Closed door means still occupied",
+                    "description": "Whether the area stays occupied while its doors stay closed after motion."
+                }
             }
         }
     }

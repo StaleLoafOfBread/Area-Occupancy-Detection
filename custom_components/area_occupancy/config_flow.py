@@ -119,6 +119,7 @@ from .const import (
     CONF_EXCLUDE_LIGHT_POWER,
     CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
+    CONF_EXCLUDED_SENSOR_TYPES,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
     CONF_HEALTH_ENABLED,
@@ -229,6 +230,7 @@ from .const import (
     MIN_PROBABILITY,
     SUBENTRY_TYPE_AREA,
     get_default_state,
+    get_sensor_type_mapping,
     get_state_options,
 )
 from .data.purpose import AreaPurpose, Purpose, get_purpose_options
@@ -1408,8 +1410,10 @@ def _create_basics_step_schema(
         LIGHT_POWER_INCLUDE,
     }:
         light_power_setting = DEFAULT_AREA_LIGHT_POWER_SETTING
-    fields[vol.Optional(CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting)] = (
-        SelectSelector(
+    area_exclusions = {
+        vol.Optional(
+            CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting
+        ): SelectSelector(
             SelectSelectorConfig(
                 options=[
                     SelectOptionDict(
@@ -1424,9 +1428,12 @@ def _create_basics_step_schema(
                 ],
                 mode=SelectSelectorMode.DROPDOWN,
             )
-        )
+        ),
+        **_create_exclusion_fields(current, hass),
+    }
+    fields[vol.Optional("area_exclusions")] = section(
+        vol.Schema(area_exclusions), {"collapsed": True}
     )
-    fields.update(_create_exclusion_fields(current, hass))
     if adjacent_options:
         adjacent_default = list(current.get(CONF_ADJACENT_AREAS) or [])
         fields[vol.Optional(CONF_ADJACENT_AREAS, default=adjacent_default)] = (
@@ -2332,37 +2339,61 @@ def _create_global_settings_schema(
 def _create_global_exclusions_schema(
     defaults: dict[str, Any],
     hass: HomeAssistant | None = None,
-    page: str | None = None,
 ) -> vol.Schema:
-    """Create schema for integration-wide exclusions."""
+    """Create one-page schema for integration-wide exclusions."""
     all_fields = _create_exclusion_fields(defaults, hass)
-    if page == "devices":
-        device_key, device_selector = next(iter(all_fields.items()))
-        fields: dict[vol.Marker, Any] = {
-            vol.Optional(
-                CONF_EXCLUDE_LIGHT_POWER,
-                default=defaults.get(
-                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
-                ),
-            ): BooleanSelector(),
-            device_key: device_selector,
-        }
-    elif page == "entities":
-        key, selector = list(all_fields.items())[1]
-        fields = {key: selector}
-    elif page == "integrations":
-        key, selector = list(all_fields.items())[2]
-        fields = {key: selector}
-    else:
-        fields = {
-            vol.Optional(
-                CONF_EXCLUDE_LIGHT_POWER,
-                default=defaults.get(
-                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
-                ),
-            ): BooleanSelector(),
-            **all_fields,
-        }
+    device_key, device_selector = next(iter(all_fields.items()))
+    entity_key, entity_selector = list(all_fields.items())[1]
+    integration_key, integration_selector = list(all_fields.items())[2]
+    sensor_type_options = [
+        SelectOptionDict(
+            value=input_type.value,
+            label=input_type.value.replace("_", " ").title(),
+        )
+        for input_type in get_sensor_type_mapping().values()
+        if input_type.value != "sleep"
+    ]
+    fields: dict[vol.Marker, Any] = {
+        vol.Optional("sensor_types"): section(
+            vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_EXCLUDED_SENSOR_TYPES,
+                        default=list(defaults.get(CONF_EXCLUDED_SENSOR_TYPES) or []),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=sensor_type_options,
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+            {"collapsed": True},
+        ),
+        vol.Optional("devices"): section(
+            vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_EXCLUDE_LIGHT_POWER,
+                        default=defaults.get(
+                            CONF_EXCLUDE_LIGHT_POWER,
+                            DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+                        ),
+                    ): BooleanSelector(),
+                    device_key: device_selector,
+                }
+            ),
+            {"collapsed": True},
+        ),
+        vol.Optional("entities"): section(
+            vol.Schema({entity_key: entity_selector}), {"collapsed": True}
+        ),
+        vol.Optional("integrations"): section(
+            vol.Schema({integration_key: integration_selector}),
+            {"collapsed": True},
+        ),
+    }
     return vol.Schema(fields)
 
 
@@ -4023,62 +4054,27 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
     async def async_step_global_exclusions(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage integration-wide device exclusions."""
+        """Manage integration-wide exclusions on one page."""
         if user_input is not None:
-            self._global_exclusions_draft = _create_global_exclusions_schema(
-                self.config_entry.options, self.hass, "devices"
-            )(user_input)
-            return await self.async_step_global_exclusions_entities()
-
-        return self.async_show_form(
-            step_id="global_exclusions",
-            data_schema=_create_global_exclusions_schema(
-                dict(self.config_entry.options), self.hass, "devices"
-            ),
-        )
-
-    async def async_step_global_exclusions_entities(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Manage integration-wide entity exclusions."""
-        if user_input is not None:
-            self._global_exclusions_draft.update(
-                _create_global_exclusions_schema(
-                    self.config_entry.options, self.hass, "entities"
-                )(user_input)
+            exclusions = flatten_sectioned_input(
+                _create_global_exclusions_schema(self.config_entry.options, self.hass)(
+                    user_input
+                )
             )
-            return await self.async_step_global_exclusions_integrations()
-
-        return self.async_show_form(
-            step_id="global_exclusions_entities",
-            data_schema=_create_global_exclusions_schema(
-                dict(self.config_entry.options), self.hass, "entities"
-            ),
-        )
-
-    async def async_step_global_exclusions_integrations(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Manage integration-wide integration exclusions."""
-        if user_input is not None:
-            exclusions = _create_global_exclusions_schema(
-                self.config_entry.options, self.hass, "integrations"
-            )(user_input)
             new_options = dict(self.config_entry.options)
             if self._global_settings_draft is not None:
                 new_options.update(self._global_settings_draft)
                 if CONF_AWAY_MODE_ENTITY not in self._global_settings_draft:
                     new_options.pop(CONF_AWAY_MODE_ENTITY, None)
-            new_options.update(self._global_exclusions_draft)
             new_options.update(exclusions)
             self._global_settings_draft = None
             self._global_exclusions_draft = {}
             return self.async_create_entry(title="", data=new_options)
 
         return self.async_show_form(
-            step_id="global_exclusions_integrations",
+            step_id="global_exclusions",
             data_schema=_create_global_exclusions_schema(
-                dict(self.config_entry.options), self.hass, "integrations"
+                dict(self.config_entry.options), self.hass
             ),
         )
 
