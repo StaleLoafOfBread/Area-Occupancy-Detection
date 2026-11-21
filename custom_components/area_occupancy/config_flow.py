@@ -4049,6 +4049,7 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
         return self.async_show_form(
             step_id="global_settings",
             data_schema=_create_global_settings_schema(dict(self.config_entry.options)),
+            last_step=False,
         )
 
     async def async_step_global_exclusions(
