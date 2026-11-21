@@ -1425,10 +1425,8 @@ def _create_basics_step_schema(
         CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
     )
     global_light_power_label = "On" if global_light_power_exclusion else "Off"
-    area_exclusions = {
-        vol.Optional(
-            CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting
-        ): SelectSelector(
+    fields[vol.Optional(CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting)] = (
+        SelectSelector(
             SelectSelectorConfig(
                 options=[
                     SelectOptionDict(
@@ -1444,7 +1442,9 @@ def _create_basics_step_schema(
                 ],
                 mode=SelectSelectorMode.DROPDOWN,
             )
-        ),
+        )
+    )
+    area_exclusions = {
         **_create_exclusion_fields(current, hass),
     }
     fields[vol.Optional("area_exclusions")] = section(
