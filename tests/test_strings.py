@@ -16,6 +16,7 @@ import pytest
 
 from custom_components.area_occupancy.config_flow import (
     SENSOR_GROUPS,
+    _create_global_exclusions_schema,
     _create_global_settings_schema,
 )
 
@@ -91,6 +92,21 @@ class TestGlobalSettings:
         )
         assert fields <= set(step["data_description"]), (
             "global_settings has no description for "
+            f"{sorted(fields - set(step['data_description']))}"
+        )
+
+
+class TestGlobalExclusions:
+    """Each field of the global exclusions form is labelled and described."""
+
+    def test_every_field_has_a_label_and_a_description(self) -> None:
+        step = _dig(_load(STRINGS), ("options", "step", "global_exclusions"))
+        fields = {str(key) for key in _create_global_exclusions_schema({}).schema}
+        assert fields <= set(step["data"]), (
+            f"global_exclusions has no label for {sorted(fields - set(step['data']))}"
+        )
+        assert fields <= set(step["data_description"]), (
+            "global_exclusions has no description for "
             f"{sorted(fields - set(step['data_description']))}"
         )
 

@@ -28,6 +28,7 @@ from custom_components.area_occupancy.config_flow import (
     _create_area_selector_schema,
     _create_basics_step_schema,
     _create_behavior_step_schema,
+    _create_global_exclusions_schema,
     _create_global_settings_schema,
     _create_motion_step_schema,
     _create_sensors_step_schema,
@@ -1567,7 +1568,29 @@ class TestGlobalSettingsAwayModeEntity:
         result = _create_global_settings_schema({})(GLOBAL_SETTINGS_INPUT)
 
         assert CONF_AWAY_MODE_ENTITY not in result
-        assert result[CONF_EXCLUDED_DEVICE_MATCHES] == []
+        assert CONF_EXCLUDED_DEVICE_MATCHES not in result
+
+
+class TestGlobalExclusions:
+    """Global and area settings expose the same exclusion controls."""
+
+    def test_global_exclusions_match_area_exclusion_fields(self) -> None:
+        exclusions = {
+            CONF_EXCLUDE_LIGHT_POWER,
+            CONF_EXCLUDED_DEVICE_MATCHES,
+            CONF_EXCLUDED_INTEGRATIONS,
+            CONF_EXCLUDED_SENSORS,
+        }
+        global_fields = {
+            str(key) for key in _create_global_exclusions_schema({}).schema
+        }
+        area_fields = {
+            str(key)
+            for key in _create_basics_step_schema(is_editing=True)
+            if str(key) in exclusions
+        }
+
+        assert global_fields == area_fields == exclusions
 
 
 class TestAreaOccupancyOptionsFlow:
@@ -1623,6 +1646,9 @@ class TestAreaOccupancyOptionsFlow:
         }
 
         result = await flow.async_step_global_settings(user_input)
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "global_exclusions"
+        result = await flow.async_step_global_exclusions({})
         assert result["type"] == FlowResultType.CREATE_ENTRY
 
         # Verify settings were saved
@@ -1644,6 +1670,8 @@ class TestAreaOccupancyOptionsFlow:
         result = await flow.async_step_global_settings(
             {**GLOBAL_SETTINGS_INPUT, CONF_AWAY_MODE_ENTITY: "input_boolean.vacation"}
         )
+        assert result["type"] == FlowResultType.FORM
+        result = await flow.async_step_global_exclusions({})
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_AWAY_MODE_ENTITY] == "input_boolean.vacation"
@@ -1657,14 +1685,15 @@ class TestAreaOccupancyOptionsFlow:
         flow = config_flow_options_flow
         flow.config_entry = config_flow_mock_config_entry_with_areas
         user_input = {
-            **GLOBAL_SETTINGS_INPUT,
             CONF_EXCLUDED_DEVICE_MATCHES: ["ratgdo"],
             CONF_EXCLUDE_LIGHT_POWER: True,
             CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
             CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
         }
 
-        result = await flow.async_step_global_settings(user_input)
+        settings_result = await flow.async_step_global_settings(GLOBAL_SETTINGS_INPUT)
+        assert settings_result["step_id"] == "global_exclusions"
+        result = await flow.async_step_global_exclusions(user_input)
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is True
@@ -1690,10 +1719,12 @@ class TestAreaOccupancyOptionsFlow:
             },
         )
 
-        result = await flow.async_step_global_settings(
+        settings_result = await flow.async_step_global_settings(GLOBAL_SETTINGS_INPUT)
+        assert settings_result["step_id"] == "global_exclusions"
+        result = await flow.async_step_global_exclusions(
             {
-                **GLOBAL_SETTINGS_INPUT,
                 CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_EXCLUDED_DEVICE_MATCHES: [],
                 CONF_EXCLUDED_SENSORS: [],
                 CONF_EXCLUDED_INTEGRATIONS: [],
             }
@@ -1725,7 +1756,9 @@ class TestAreaOccupancyOptionsFlow:
             },
         )
 
-        result = await flow.async_step_global_settings(GLOBAL_SETTINGS_INPUT)
+        settings_result = await flow.async_step_global_settings(GLOBAL_SETTINGS_INPUT)
+        assert settings_result["step_id"] == "global_exclusions"
+        result = await flow.async_step_global_exclusions({})
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert CONF_AWAY_MODE_ENTITY not in result["data"]

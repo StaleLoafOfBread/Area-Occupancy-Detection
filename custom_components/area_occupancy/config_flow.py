@@ -1268,6 +1268,52 @@ def _create_wasp_in_box_section_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
+def _create_exclusion_fields(
+    defaults: dict[str, Any],
+    hass: HomeAssistant | None,
+    *,
+    default_exclude_light_power: bool,
+) -> dict[vol.Marker, Any]:
+    """Create the shared discovery and entity exclusion fields."""
+    return {
+        vol.Optional(
+            CONF_EXCLUDE_LIGHT_POWER,
+            default=defaults.get(CONF_EXCLUDE_LIGHT_POWER, default_exclude_light_power),
+        ): BooleanSelector(),
+        vol.Optional(
+            CONF_EXCLUDED_DEVICE_MATCHES,
+            default=list(
+                defaults.get(
+                    CONF_EXCLUDED_DEVICE_MATCHES, DEFAULT_EXCLUDED_DEVICE_MATCHES
+                )
+                or []
+            ),
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=_get_excluded_device_match_options(hass, defaults),
+                multiple=True,
+                custom_value=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Optional(
+            CONF_EXCLUDED_SENSORS,
+            default=list(defaults.get(CONF_EXCLUDED_SENSORS) or []),
+        ): EntitySelector(EntitySelectorConfig(multiple=True)),
+        vol.Optional(
+            CONF_EXCLUDED_INTEGRATIONS,
+            default=list(defaults.get(CONF_EXCLUDED_INTEGRATIONS) or []),
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=_get_excluded_integration_options(hass, defaults),
+                multiple=True,
+                custom_value=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
+
+
 def _create_basics_step_schema(
     *,
     is_editing: bool = False,
@@ -1333,47 +1379,11 @@ def _create_basics_step_schema(
             default=current.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
         )
     ] = BooleanSelector()
-    fields[
-        vol.Optional(
-            CONF_EXCLUDE_LIGHT_POWER,
-            default=current.get(CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER),
-        )
-    ] = BooleanSelector()
-    fields[
-        vol.Optional(
-            CONF_EXCLUDED_DEVICE_MATCHES,
-            default=list(
-                current.get(
-                    CONF_EXCLUDED_DEVICE_MATCHES, DEFAULT_EXCLUDED_DEVICE_MATCHES
-                )
-                or []
-            ),
-        )
-    ] = SelectSelector(
-        SelectSelectorConfig(
-            options=_get_excluded_device_match_options(hass, current),
-            multiple=True,
-            custom_value=True,
-            mode=SelectSelectorMode.DROPDOWN,
-        )
-    )
-    fields[
-        vol.Optional(
-            CONF_EXCLUDED_SENSORS,
-            default=current.get(CONF_EXCLUDED_SENSORS, []),
-        )
-    ] = EntitySelector(EntitySelectorConfig(multiple=True))
-    fields[
-        vol.Optional(
-            CONF_EXCLUDED_INTEGRATIONS,
-            default=list(current.get(CONF_EXCLUDED_INTEGRATIONS) or []),
-        )
-    ] = SelectSelector(
-        SelectSelectorConfig(
-            options=_get_excluded_integration_options(hass, current),
-            multiple=True,
-            custom_value=True,
-            mode=SelectSelectorMode.DROPDOWN,
+    fields.update(
+        _create_exclusion_fields(
+            current,
+            hass,
+            default_exclude_light_power=DEFAULT_EXCLUDE_LIGHT_POWER,
         )
     )
     if adjacent_options:
@@ -2231,7 +2241,7 @@ def _create_area_selector_schema(
 
 
 def _create_global_settings_schema(
-    defaults: dict[str, Any], hass: HomeAssistant | None = None
+    defaults: dict[str, Any],
 ) -> vol.Schema:
     """Create schema for global settings."""
     return vol.Schema(
@@ -2262,44 +2272,6 @@ def _create_global_settings_schema(
                 ),
                 vol.Coerce(int),
             ),
-            vol.Required(
-                CONF_EXCLUDE_LIGHT_POWER,
-                default=defaults.get(
-                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
-                ),
-            ): BooleanSelector(),
-            vol.Optional(
-                CONF_EXCLUDED_DEVICE_MATCHES,
-                default=list(
-                    defaults.get(
-                        CONF_EXCLUDED_DEVICE_MATCHES,
-                        DEFAULT_EXCLUDED_DEVICE_MATCHES,
-                    )
-                    or []
-                ),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=_get_excluded_device_match_options(hass, defaults),
-                    multiple=True,
-                    custom_value=True,
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                CONF_EXCLUDED_SENSORS,
-                default=list(defaults.get(CONF_EXCLUDED_SENSORS) or []),
-            ): EntitySelector(EntitySelectorConfig(multiple=True)),
-            vol.Optional(
-                CONF_EXCLUDED_INTEGRATIONS,
-                default=list(defaults.get(CONF_EXCLUDED_INTEGRATIONS) or []),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=_get_excluded_integration_options(hass, defaults),
-                    multiple=True,
-                    custom_value=True,
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
             # The current value is only suggested, not a default: a default
             # would refill the field whenever the user clears it.
             vol.Optional(
@@ -2309,6 +2281,19 @@ def _create_global_settings_schema(
                 EntitySelectorConfig(domain=list(AWAY_MODE_ENTITY_DOMAINS))
             ),
         }
+    )
+
+
+def _create_global_exclusions_schema(
+    defaults: dict[str, Any], hass: HomeAssistant | None = None
+) -> vol.Schema:
+    """Create schema for integration-wide exclusions."""
+    return vol.Schema(
+        _create_exclusion_fields(
+            defaults,
+            hass,
+            default_exclude_light_power=DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+        )
     )
 
 
@@ -3653,6 +3638,7 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
         self._area_to_reset: str | None = None  # area_id pending learning reset
         self._area_config_draft: dict[str, Any] = {}
         self._area_edit_section: str | None = None
+        self._global_settings_draft: dict[str, Any] | None = None
         self._sensor_group_being_edited: str | None = None
         self._person_being_edited: int | None = None  # Index into people list
         self._person_to_remove: int | None = None  # Index into people list for removal
@@ -3958,54 +3944,38 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
     ) -> ConfigFlowResult:
         """Manage global settings."""
         if user_input is not None:
-            # Validate and coerce using the schema
-            schema = _create_global_settings_schema(
-                self.config_entry.options, self.hass
-            )
-            user_input = schema(user_input)
-
-            # Update the config entry options directly
-            new_options = dict(self.config_entry.options)
-            new_options.update(user_input)
-            # A cleared optional field is left out of the input, and update()
-            # cannot remove a key, so the old value would come back.
-            if CONF_AWAY_MODE_ENTITY not in user_input:
-                new_options.pop(CONF_AWAY_MODE_ENTITY, None)
-
-            return self.async_create_entry(title="", data=new_options)
-
-        # Get current values
-        defaults = {
-            CONF_SLEEP_START: self.config_entry.options.get(
-                CONF_SLEEP_START, DEFAULT_SLEEP_START
-            ),
-            CONF_SLEEP_END: self.config_entry.options.get(
-                CONF_SLEEP_END, DEFAULT_SLEEP_END
-            ),
-            CONF_HEALTH_ENABLED: self.config_entry.options.get(
-                CONF_HEALTH_ENABLED, DEFAULT_HEALTH_ENABLED
-            ),
-            CONF_SENSOR_PRECISION: self.config_entry.options.get(
-                CONF_SENSOR_PRECISION, DEFAULT_SENSOR_PRECISION
-            ),
-            CONF_EXCLUDE_LIGHT_POWER: self.config_entry.options.get(
-                CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
-            ),
-            CONF_EXCLUDED_DEVICE_MATCHES: self.config_entry.options.get(
-                CONF_EXCLUDED_DEVICE_MATCHES, DEFAULT_EXCLUDED_DEVICE_MATCHES
-            ),
-            CONF_EXCLUDED_SENSORS: self.config_entry.options.get(
-                CONF_EXCLUDED_SENSORS, []
-            ),
-            CONF_EXCLUDED_INTEGRATIONS: self.config_entry.options.get(
-                CONF_EXCLUDED_INTEGRATIONS, []
-            ),
-            CONF_AWAY_MODE_ENTITY: self.config_entry.options.get(CONF_AWAY_MODE_ENTITY),
-        }
+            self._global_settings_draft = _create_global_settings_schema(
+                self.config_entry.options
+            )(user_input)
+            return await self.async_step_global_exclusions()
 
         return self.async_show_form(
             step_id="global_settings",
-            data_schema=_create_global_settings_schema(defaults, self.hass),
+            data_schema=_create_global_settings_schema(dict(self.config_entry.options)),
+        )
+
+    async def async_step_global_exclusions(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage integration-wide discovery and entity exclusions."""
+        if user_input is not None:
+            exclusions = _create_global_exclusions_schema(
+                self.config_entry.options, self.hass
+            )(user_input)
+            new_options = dict(self.config_entry.options)
+            if self._global_settings_draft is not None:
+                new_options.update(self._global_settings_draft)
+                if CONF_AWAY_MODE_ENTITY not in self._global_settings_draft:
+                    new_options.pop(CONF_AWAY_MODE_ENTITY, None)
+            new_options.update(exclusions)
+            self._global_settings_draft = None
+            return self.async_create_entry(title="", data=new_options)
+
+        return self.async_show_form(
+            step_id="global_exclusions",
+            data_schema=_create_global_exclusions_schema(
+                dict(self.config_entry.options), self.hass
+            ),
         )
 
     def _get_person_display_name(self, person_entity: str) -> str:
