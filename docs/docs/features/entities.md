@@ -16,6 +16,7 @@ This integration creates several entities in Home Assistant to expose the calcul
     *   **Description:** Shows the current calculated Bayesian probability that the area is occupied. This value incorporates sensor inputs, learned priors, weights, and decay (if active).
     *   **Device Class:** `power_factor` (used for % display)
     *   **State Class:** `measurement`
+    *   **Attributes:** Includes active entity IDs, the learned prior, and decaying entity details. Each decaying entity includes its current `decay_factor`. Effective half-lives are exposed in the live-only `decaying_half_lives` map for the dashboard's orange timer. Configured `adjacent_areas` are also exposed so the dashboard can group connected rooms. Both attributes are excluded from Recorder history.
 
 *   **`number.area_occupancy_threshold_<area_name>` (Occupancy Threshold)**
     *   **State:** Numeric value (configurable range, typically 1-99)

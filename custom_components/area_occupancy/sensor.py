@@ -179,6 +179,8 @@ class PriorsSensor(AreaOccupancySensorBase):
 class ProbabilitySensor(AreaOccupancySensorBase):
     """Probability sensor for current area occupancy."""
 
+    _unrecorded_attributes = frozenset({"adjacent_areas", "decaying_half_lives"})
+
     def __init__(
         self,
         area_handle: AreaDeviceHandle | None = None,
@@ -225,16 +227,25 @@ class ProbabilitySensor(AreaOccupancySensorBase):
         try:
             snapshot = area.prior.diagnostic_snapshot()
             active_entities = [e.entity_id for e in area.entities.active_entities]
+            decaying = area.entities.decaying_entities
             decaying_entities = [
-                {"entity_id": e.entity_id, "decay_factor": e.decay.decay_factor}
-                for e in area.entities.decaying_entities
+                {
+                    "entity_id": e.entity_id,
+                    "decay_factor": e.decay.decay_factor,
+                }
+                for e in decaying
             ]
+            decaying_half_lives = {
+                e.entity_id: e.decay.half_life for e in decaying
+            }
         except (AttributeError, KeyError, TypeError):
             return {}
         return {
             **snapshot,
             "active_entities": active_entities,
             "decaying_entities": decaying_entities,
+            "decaying_half_lives": decaying_half_lives,
+            "adjacent_areas": list(area.config.adjacent_areas or []),
         }
 
 

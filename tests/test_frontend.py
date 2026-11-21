@@ -22,6 +22,8 @@ from homeassistant.core import HomeAssistant
 
 COMPONENT_DIR = Path(aod_init.__file__).parent
 CARD_URL = f"{FRONTEND_URL_BASE}/{TIME_PRIORS_CARD_FILENAME}"
+STRATEGY_FILENAME = "area-occupancy-dashboard-strategy.js"
+STRATEGY_URL = f"{FRONTEND_URL_BASE}/{STRATEGY_FILENAME}"
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ def frontend_mocks(hass: HomeAssistant):
         yield hass.http.async_register_static_paths, add_js
 
 
-async def test_registers_static_path_for_bundled_card(
+async def test_registers_static_paths_for_bundled_frontend_assets(
     hass: HomeAssistant, frontend_mocks
 ) -> None:
     """The static path points at the card file shipped inside the integration."""
@@ -49,14 +51,14 @@ async def test_registers_static_path_for_bundled_card(
 
     register.assert_awaited_once()
     (configs,) = register.await_args.args
-    assert len(configs) == 1
-    config = configs[0]
-    assert config.url_path == CARD_URL
-    assert Path(config.path) == COMPONENT_DIR / FRONTEND_DIR / TIME_PRIORS_CARD_FILENAME
-    assert config.cache_headers is True
+    assert {config.url_path for config in configs} == {CARD_URL, STRATEGY_URL}
+    for config in configs:
+        filename = config.url_path.rsplit("/", 1)[-1]
+        assert Path(config.path) == COMPONENT_DIR / FRONTEND_DIR / filename
+        assert config.cache_headers is True
 
 
-async def test_registers_versioned_js_url_once(
+async def test_registers_versioned_js_urls_once(
     hass: HomeAssistant, frontend_mocks
 ) -> None:
     """The extra module URL carries the integration version and is added once."""
@@ -65,12 +67,16 @@ async def test_registers_versioned_js_url_once(
     assert await async_setup(hass, {}) is True
     assert await async_setup(hass, {}) is True
 
-    add_js.assert_called_once_with(hass, f"{CARD_URL}?v=2026.9.99")
+    assert {call.args[1] for call in add_js.call_args_list} == {
+        f"{CARD_URL}?v=2026.9.99",
+        f"{STRATEGY_URL}?v=2026.9.99",
+    }
+    assert add_js.call_count == 2
     register.assert_awaited_once()
     assert hass.data[FRONTEND_REGISTERED_KEY] is True
 
 
-async def test_missing_card_file_warns_and_setup_continues(
+async def test_missing_card_file_warns_but_registers_strategy(
     hass: HomeAssistant, frontend_mocks, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A missing card file is logged and skipped; setup still succeeds."""
@@ -82,9 +88,11 @@ async def test_missing_card_file_warns_and_setup_continues(
     ):
         assert await async_setup(hass, {}) is True
 
-    register.assert_not_awaited()
-    add_js.assert_not_called()
-    assert FRONTEND_REGISTERED_KEY not in hass.data
+    register.assert_awaited_once()
+    (configs,) = register.await_args.args
+    assert [config.url_path for config in configs] == [STRATEGY_URL]
+    add_js.assert_called_once_with(hass, f"{STRATEGY_URL}?v=2026.9.99")
+    assert hass.data[FRONTEND_REGISTERED_KEY] is True
     assert "Time-priors card not found" in caplog.text
 
 

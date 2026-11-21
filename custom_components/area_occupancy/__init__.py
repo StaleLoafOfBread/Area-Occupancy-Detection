@@ -256,7 +256,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Serve the bundled time-priors card and load it on every dashboard.
+    """Serve the bundled frontend tools and load them on every dashboard.
 
     Runs from the component-level ``async_setup`` so it happens once per Home
     Assistant start, not once per config entry. The card is served with long
@@ -268,24 +268,39 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if hass.data.get(FRONTEND_REGISTERED_KEY):
         return
 
-    card_path = Path(__file__).parent / FRONTEND_DIR / TIME_PRIORS_CARD_FILENAME
-    if not await hass.async_add_executor_job(card_path.is_file):
-        _LOGGER.warning(
-            "Time-priors card not found at %s; the dashboard card will not be "
-            "available",
-            card_path,
-        )
-        return
-
-    url_path = f"{FRONTEND_URL_BASE}/{TIME_PRIORS_CARD_FILENAME}"
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(url_path, str(card_path), cache_headers=True)]
+    frontend_dir = Path(__file__).parent / FRONTEND_DIR
+    assets = (
+        (TIME_PRIORS_CARD_FILENAME, "time-priors card"),
+        ("area-occupancy-dashboard-strategy.js", "dashboard strategy"),
     )
+    paths = []
+    urls = []
+    for filename, label in assets:
+        asset_path = frontend_dir / filename
+        if not await hass.async_add_executor_job(asset_path.is_file):
+            if filename == TIME_PRIORS_CARD_FILENAME:
+                _LOGGER.warning(
+                    "Time-priors card not found at %s; the dashboard card will "
+                    "not be available",
+                    asset_path,
+                )
+            else:
+                _LOGGER.warning("Area Occupancy %s not found at %s", label, asset_path)
+            continue
+        url_path = f"{FRONTEND_URL_BASE}/{filename}"
+        paths.append(StaticPathConfig(url_path, str(asset_path), cache_headers=True))
+        urls.append(url_path)
+    if not paths:
+        return
+    await hass.http.async_register_static_paths(paths)
     integration = await async_get_integration(hass, DOMAIN)
-    add_extra_js_url(hass, f"{url_path}?v={integration.version}")
+    for url_path in urls:
+        add_extra_js_url(hass, f"{url_path}?v={integration.version}")
     hass.data[FRONTEND_REGISTERED_KEY] = True
     _LOGGER.debug(
-        "Registered time-priors card at %s (v%s)", url_path, integration.version
+        "Registered Area Occupancy frontend assets at %s (v%s)",
+        ", ".join(urls),
+        integration.version,
     )
 
 
