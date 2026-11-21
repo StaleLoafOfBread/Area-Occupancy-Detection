@@ -1113,6 +1113,26 @@
                     "excluded_integrations": "Select integrations or source domains to omit from automatic discovery in every area. This does not block manually selected entities; use the entity exclusion setting for those."
                 }
             },
+            "global_exclusions_entities": {
+                "title": "Global Entity Exclusions",
+                "description": "Select entities to always ignore in occupancy detection across every area.",
+                "data": {
+                    "excluded_sensors": "Entities excluded from occupancy detection everywhere"
+                },
+                "data_description": {
+                    "excluded_sensors": "Area settings cannot override this, and matching saved sensor selections are removed."
+                }
+            },
+            "global_exclusions_integrations": {
+                "title": "Global Integration Exclusions",
+                "description": "Choose integrations omitted from automatic discovery in every area.",
+                "data": {
+                    "excluded_integrations": "Integrations excluded from discovery everywhere"
+                },
+                "data_description": {
+                    "excluded_integrations": "This does not block manually selected entities; use the entity exclusion step for those."
+                }
+            },
             "manage_people": {
                 "title": "Manage People",
                 "description": "Configure people for sleep presence detection. Each person needs a Home Assistant person entity and a sleep confidence sensor from the Companion App.",
