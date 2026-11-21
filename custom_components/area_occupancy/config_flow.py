@@ -177,6 +177,7 @@ from .const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_APPLIANCE_ACTIVE_STATES,
+    DEFAULT_AREA_LIGHT_POWER_SETTING,
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_COVER_ACTIVE_STATES,
     DEFAULT_CUSTOM_BINARY_ACTIVE_STATES,
@@ -185,7 +186,6 @@ from .const import (
     DEFAULT_DECAY_ENABLED,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
-    DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
     DEFAULT_EXPAND_GROUPS,
     DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
@@ -220,6 +220,9 @@ from .const import (
     DEFAULT_WINDOW_ACTIVE_STATE,
     DOMAIN,
     DURATION_FIELDS,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
+    LIGHT_POWER_INCLUDE,
     MAX_PROBABILITY,
     MIN_PROBABILITY,
     SUBENTRY_TYPE_AREA,
@@ -1271,15 +1274,9 @@ def _create_wasp_in_box_section_schema(defaults: dict[str, Any]) -> vol.Schema:
 def _create_exclusion_fields(
     defaults: dict[str, Any],
     hass: HomeAssistant | None,
-    *,
-    default_exclude_light_power: bool,
 ) -> dict[vol.Marker, Any]:
-    """Create the shared discovery and entity exclusion fields."""
+    """Create the shared device, entity, and integration exclusion fields."""
     return {
-        vol.Optional(
-            CONF_EXCLUDE_LIGHT_POWER,
-            default=defaults.get(CONF_EXCLUDE_LIGHT_POWER, default_exclude_light_power),
-        ): BooleanSelector(),
         vol.Optional(
             CONF_EXCLUDED_DEVICE_MATCHES,
             default=list(
@@ -1379,13 +1376,38 @@ def _create_basics_step_schema(
             default=current.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
         )
     ] = BooleanSelector()
-    fields.update(
-        _create_exclusion_fields(
-            current,
-            hass,
-            default_exclude_light_power=DEFAULT_EXCLUDE_LIGHT_POWER,
+    light_power_setting = current.get(
+        CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
+    )
+    if light_power_setting is True:
+        light_power_setting = LIGHT_POWER_EXCLUDE
+    elif light_power_setting is False:
+        light_power_setting = LIGHT_POWER_FOLLOW_GLOBAL
+    if light_power_setting not in {
+        LIGHT_POWER_FOLLOW_GLOBAL,
+        LIGHT_POWER_EXCLUDE,
+        LIGHT_POWER_INCLUDE,
+    }:
+        light_power_setting = DEFAULT_AREA_LIGHT_POWER_SETTING
+    fields[vol.Optional(CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting)] = (
+        SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(
+                        value=LIGHT_POWER_FOLLOW_GLOBAL, label="Follow Global"
+                    ),
+                    SelectOptionDict(
+                        value=LIGHT_POWER_EXCLUDE, label="Exclude Light Power Sensors"
+                    ),
+                    SelectOptionDict(
+                        value=LIGHT_POWER_INCLUDE, label="Include Light Power Sensors"
+                    ),
+                ],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
         )
     )
+    fields.update(_create_exclusion_fields(current, hass))
     if adjacent_options:
         adjacent_default = list(current.get(CONF_ADJACENT_AREAS) or [])
         fields[vol.Optional(CONF_ADJACENT_AREAS, default=adjacent_default)] = (
@@ -1856,7 +1878,7 @@ def _sync_discovered_and_excluded(
                 enabled_domains=enabled_domains,
                 excluded_platforms=draft.get(CONF_EXCLUDED_INTEGRATIONS),
                 exclude_light_power=draft.get(
-                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
+                    CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
                 ),
                 excluded_device_matches=excluded_device_matches,
                 excluded_entities=[
@@ -2288,13 +2310,16 @@ def _create_global_exclusions_schema(
     defaults: dict[str, Any], hass: HomeAssistant | None = None
 ) -> vol.Schema:
     """Create schema for integration-wide exclusions."""
-    return vol.Schema(
-        _create_exclusion_fields(
-            defaults,
-            hass,
-            default_exclude_light_power=DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
-        )
-    )
+    fields: dict[vol.Marker, Any] = {
+        vol.Optional(
+            CONF_EXCLUDE_LIGHT_POWER,
+            default=defaults.get(
+                CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+            ),
+        ): BooleanSelector()
+    }
+    fields.update(_create_exclusion_fields(defaults, hass))
+    return vol.Schema(fields)
 
 
 class BaseOccupancyFlow:

@@ -24,6 +24,9 @@ from custom_components.area_occupancy.const import (
     CONF_PURPOSE,
     CONF_TEMPERATURE_SENSORS,
     DEFAULT_PURPOSE,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
+    LIGHT_POWER_INCLUDE,
     SUBENTRY_TYPE_AREA,
 )
 from custom_components.area_occupancy.data.purpose import (
@@ -1236,8 +1239,8 @@ def test_auto_added_provenance_removed_but_explicit_selection_kept() -> None:
     assert resolved[CONF_AUTO_ADDED_SENSORS] == {}
 
 
-def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
-    """Light-backed power sensors are excluded by default while appliance power stays."""
+def test_light_power_area_override_and_source_domain_blacklist() -> None:
+    """Area light-power choices follow or override the global setting."""
     lamp_power = _reg_entry(
         "sensor.desk_lamp_power", area_id="office", device_class="power"
     )
@@ -1287,15 +1290,42 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
             return_value=devices,
         ),
     ):
-        default_res = resolve_area_sensors(hass, {CONF_AREA_ID: "office"})
+        follow_global_default_res = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_FOLLOW_GLOBAL,
+            },
+        )
+        exclude_lights_res = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_EXCLUDE,
+            },
+        )
         include_lights_res = resolve_area_sensors(
-            hass, {CONF_AREA_ID: "office", CONF_EXCLUDE_LIGHT_POWER: False}
+            hass,
+            {CONF_AREA_ID: "office", CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_INCLUDE},
+        )
+        follow_global_excluded_res = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_FOLLOW_GLOBAL,
+            },
+            {CONF_EXCLUDE_LIGHT_POWER: True},
+        )
+        include_lights_global_exclusion_res = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "office", CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_INCLUDE},
+            {CONF_EXCLUDE_LIGHT_POWER: True},
         )
         vacuum_blacklisted_res = resolve_area_sensors(
             hass,
             {
                 CONF_AREA_ID: "office",
-                CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_INCLUDE,
                 CONF_EXCLUDED_INTEGRATIONS: ["powercalc:vacuum"],
             },
         )
@@ -1303,7 +1333,7 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
             hass,
             {
                 CONF_AREA_ID: "office",
-                CONF_EXCLUDE_LIGHT_POWER: False,
+                CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_FOLLOW_GLOBAL,
                 CONF_POWER_SENSORS: [
                     "sensor.rosey_power",
                     "sensor.desk_plug_power",
@@ -1316,11 +1346,27 @@ def test_exclude_light_power_default_and_source_domain_blacklist() -> None:
             },
         )
 
-    assert default_res[CONF_POWER_SENSORS] == [
+    assert follow_global_default_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_lamp_power",
+        "sensor.desk_plug_power",
+        "sensor.office_ceiling_power",
+        "sensor.rosey_power",
+    ]
+    assert exclude_lights_res[CONF_POWER_SENSORS] == [
         "sensor.desk_plug_power",
         "sensor.rosey_power",
     ]
     assert include_lights_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_lamp_power",
+        "sensor.desk_plug_power",
+        "sensor.office_ceiling_power",
+        "sensor.rosey_power",
+    ]
+    assert follow_global_excluded_res[CONF_POWER_SENSORS] == [
+        "sensor.desk_plug_power",
+        "sensor.rosey_power",
+    ]
+    assert include_lights_global_exclusion_res[CONF_POWER_SENSORS] == [
         "sensor.desk_lamp_power",
         "sensor.desk_plug_power",
         "sensor.office_ceiling_power",

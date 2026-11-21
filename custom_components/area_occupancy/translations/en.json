@@ -267,7 +267,7 @@
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Expand groups into member entities",
-                    "exclude_light_power": "Exclude light power sensors",
+                    "exclude_light_power": "Light-derived power sensor handling",
                     "excluded_device_matches": "Exclude devices by manufacturer or model",
                     "excluded_sensors": "Exclude from automatic discovery",
                     "excluded_integrations": "Integrations to exclude from automatic discovery"
@@ -278,10 +278,10 @@
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
-                    "exclude_light_power": "Skip power sensors that measure light entities (such as Powercalc light sensors) during automatic discovery so occupancy-controlled lights do not create a feedback loop.",
-                    "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model. Matching entities are ignored even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) whose entities will not be auto-added for this area."
+                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
+                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
+                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
                 },
                 "sections": {
                     "auto_discovery_types": {
@@ -500,7 +500,7 @@
                     "purpose": "Area Purpose",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Expand groups into member entities",
-                    "exclude_light_power": "Exclude light power sensors",
+                    "exclude_light_power": "Light-derived power sensor handling",
                     "excluded_device_matches": "Exclude devices by manufacturer or model",
                     "excluded_sensors": "Exclude from automatic discovery",
                     "excluded_integrations": "Integrations to exclude from automatic discovery",
@@ -510,10 +510,10 @@
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
-                    "exclude_light_power": "Skip power sensors that measure light entities (such as Powercalc light sensors) during automatic discovery so occupancy-controlled lights do not create a feedback loop.",
-                    "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model. Matching entities are ignored even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) whose entities will not be auto-added for this area.",
+                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
+                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
+                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet."
                 },
                 "sections": {
@@ -817,7 +817,7 @@
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Expand groups into member entities",
-                    "exclude_light_power": "Exclude light power sensors",
+                    "exclude_light_power": "Light-derived power sensor handling",
                     "excluded_device_matches": "Exclude devices by manufacturer or model",
                     "excluded_sensors": "Exclude from automatic discovery",
                     "excluded_integrations": "Integrations to exclude from automatic discovery"
@@ -828,10 +828,10 @@
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
-                    "exclude_light_power": "Skip power sensors that measure light entities (such as Powercalc light sensors) during automatic discovery so occupancy-controlled lights do not create a feedback loop.",
-                    "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model. Matching entities are ignored even if previously selected.",
-                    "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected.",
-                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) whose entities will not be auto-added for this area."
+                    "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
+                    "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
+                    "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
+                    "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
                 },
                 "sections": {
                     "auto_discovery_types": {
@@ -1071,17 +1071,17 @@
             },
             "global_exclusions": {
                 "title": "Global Exclusions",
-                "description": "Configure entities, devices, and integrations to exclude across every area.",
+                "description": "Global entity and device exclusions remove matching sensors from every area. Global integration exclusions apply to automatic discovery everywhere; manual selections remain allowed. Each area can follow or override the global light-power setting.",
                 "data": {
-                    "exclude_light_power": "Exclude light-derived power sensors everywhere",
+                    "exclude_light_power": "Exclude light-derived power sensors by default",
                     "excluded_device_matches": "Device manufacturer/model text to exclude everywhere",
                     "excluded_sensors": "Entities excluded from occupancy detection everywhere",
                     "excluded_integrations": "Integrations excluded from discovery everywhere"
                 },
                 "data_description": {
-                    "exclude_light_power": "Skips power sensors linked to light entities (such as Powercalc light sensors) during automatic discovery in every area. This prevents occupancy-controlled lights from feeding back into occupancy detection. Off by default; an area's own setting can still enable it.",
+                    "exclude_light_power": "Off by default. Sets the default for areas set to Follow Global. An area's explicit Exclude or Include choice overrides it. This affects automatic discovery only; manually selected sensors are not removed.",
                     "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model across every area. Matching entities are ignored even if previously selected.",
-                    "excluded_sensors": "Select entities to always ignore in occupancy detection across every area. This also overrides manual sensor selections saved in individual areas.",
+                    "excluded_sensors": "Select entities to always ignore in occupancy detection across every area. Area settings cannot override this, and matching saved sensor selections are removed.",
                     "excluded_integrations": "Select integrations or source domains to omit from automatic discovery in every area. This does not block manually selected entities; use the entity exclusion setting for those."
                 }
             },
@@ -1358,7 +1358,7 @@
                         "adjacent_areas": "Adjacent Areas",
                         "auto_discover_sensors": "Automatically discover sensors",
                         "expand_groups": "Expand groups into member entities",
-                        "exclude_light_power": "Exclude light power sensors",
+                        "exclude_light_power": "Light-derived power sensor handling",
                         "excluded_device_matches": "Exclude devices by manufacturer or model",
                         "excluded_sensors": "Exclude from automatic discovery",
                         "excluded_integrations": "Integrations to exclude from automatic discovery"
@@ -1369,10 +1369,10 @@
                         "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                         "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                         "expand_groups": "Expand Home Assistant group entities into their domain-matching member entities instead of tracking the group entity itself.",
-                        "exclude_light_power": "Skip power sensors that measure light entities (such as Powercalc light sensors) during automatic discovery so occupancy-controlled lights do not create a feedback loop.",
-                        "excluded_device_matches": "Enter or select text fragments to match case-insensitively against each device's manufacturer or model. Matching entities are ignored even if previously selected.",
-                        "excluded_sensors": "Entities to block from occupancy detection in this area. Excluded entities are ignored even if they were previously selected.",
-                        "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) whose entities will not be auto-added for this area."
+                        "exclude_light_power": "Choose how light-derived power sensors are discovered in this area. Follow Global uses the global setting; Exclude and Include override it. This affects automatic discovery only, not manually selected sensors.",
+                        "excluded_device_matches": "Enter text fragments matched case-insensitively against device manufacturer or model. This combines with global matches; matching entities are removed even if previously selected.",
+                        "excluded_sensors": "Entities to block from occupancy detection in this area. Global entity exclusions also apply and cannot be overridden here.",
+                        "excluded_integrations": "Integrations (such as Powercalc or Magic Areas) omitted from automatic discovery in this area. Global exclusions also apply; this does not block manually selected entities."
                     },
                     "sections": {
                         "auto_discovery_types": {

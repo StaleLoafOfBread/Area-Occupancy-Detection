@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
     CONF_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
     CONF_MOTION_SENSORS,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
@@ -23,6 +24,8 @@ from custom_components.area_occupancy.const import (
     CONF_VERSION,
     CONF_VERSION_MINOR,
     DOMAIN,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
     SUBENTRY_TYPE_AREA,
 )
 from custom_components.area_occupancy.migrations import (
@@ -1672,7 +1675,7 @@ class TestMigrateAreasToSubentries:
 
 
 class TestMigrateMotionTimeoutDefault:
-    """v19 -> v20: areas still at the old 300 s default move to 90 s (#604).
+    """v19 -> v20 -> v21: migrate motion and light-power area defaults.
 
     The setting never reached learning before, so a stored 300 was the old
     default, not a tuned value; any other value is left alone.
@@ -1705,10 +1708,50 @@ class TestMigrateMotionTimeoutDefault:
 
         assert await async_migrate_entry(hass, entry)
 
-        assert entry.version == 20
+        assert entry.version == 21
         timeouts = {
             subentry.title: subentry.data.get(CONF_MOTION_TIMEOUT)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_AREA
         }
         assert timeouts == {"Living Room": 90, "Kitchen": 120, "Testing": None}
+
+    async def test_migrates_area_light_power_choices(
+        self, hass: HomeAssistant, setup_area_registry: dict[str, str]
+    ) -> None:
+        """Old booleans preserve their behavior when the per-area choice is added."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title="Area Occupancy Detection",
+            version=18,
+            data={
+                CONF_AREAS: [
+                    {
+                        CONF_AREA_ID: setup_area_registry["Living Room"],
+                        CONF_EXCLUDE_LIGHT_POWER: True,
+                    },
+                    {
+                        CONF_AREA_ID: setup_area_registry["Kitchen"],
+                        CONF_EXCLUDE_LIGHT_POWER: False,
+                    },
+                    {CONF_AREA_ID: setup_area_registry["Testing"]},
+                ]
+            },
+        )
+        entry.add_to_hass(hass)
+        _migrate_areas_to_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=19)
+
+        assert await async_migrate_entry(hass, entry)
+
+        migrated_settings = {
+            subentry.title: subentry.data[CONF_EXCLUDE_LIGHT_POWER]
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_AREA
+        }
+        assert entry.version == 21
+        assert migrated_settings == {
+            "Living Room": LIGHT_POWER_EXCLUDE,
+            "Kitchen": LIGHT_POWER_FOLLOW_GLOBAL,
+            "Testing": LIGHT_POWER_EXCLUDE,
+        }

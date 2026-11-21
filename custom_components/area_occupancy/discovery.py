@@ -57,6 +57,7 @@ from .const import (
     CONF_VOC_SENSORS,
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_SENSORS,
+    DEFAULT_AREA_LIGHT_POWER_SETTING,
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_LIGHT_POWER,
@@ -64,6 +65,9 @@ from .const import (
     DEFAULT_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
+    LIGHT_POWER_INCLUDE,
     WEATHER_KEYWORDS,
     WEATHER_PLATFORMS,
 )
@@ -460,6 +464,19 @@ def get_enabled_discovery_domains(data: dict[str, Any]) -> set[str]:
     return {domain for domain in raw_domains if domain in DISCOVERABLE_SENSOR_KEYS}
 
 
+def _light_power_exclusion_enabled(
+    area_setting: bool | str, global_setting: Any
+) -> bool:
+    """Resolve the area's light-power choice against the global default."""
+    if area_setting == LIGHT_POWER_EXCLUDE or area_setting is True:
+        return True
+    if area_setting == LIGHT_POWER_INCLUDE:
+        return False
+    if area_setting == LIGHT_POWER_FOLLOW_GLOBAL or area_setting is False:
+        return bool(global_setting)
+    raise ValueError(f"Invalid light-power exclusion setting: {area_setting!r}")
+
+
 def discover_area_sensors(
     hass: HomeAssistant,
     area_id: str | None,
@@ -467,7 +484,7 @@ def discover_area_sensors(
     expand_groups: bool = DEFAULT_EXPAND_GROUPS,
     enabled_domains: Collection[str] | None = None,
     excluded_platforms: Collection[str] | None = None,
-    exclude_light_power: bool = DEFAULT_EXCLUDE_LIGHT_POWER,
+    exclude_light_power: bool | str = DEFAULT_AREA_LIGHT_POWER_SETTING,
     excluded_device_matches: Collection[str] | None = None,
     excluded_entities: Collection[str] | None = None,
     global_options: Mapping[str, Any] | None = None,
@@ -478,10 +495,9 @@ def discover_area_sensors(
     excluded-integration entities are skipped. When ``expand_groups`` is enabled,
     group entities are replaced by their domain-filtered member entities. When
     ``enabled_domains`` is given, only matching sensor config keys are returned.
-    When ``exclude_light_power`` is enabled, light-backed power sensors (such as
-    Powercalc light sensors) are skipped. Global exclusions are combined with
-    the supplied area-specific exclusions. Device exclusions match
-    case-insensitive fragments in the device manufacturer or model.
+    The area's light-power setting follows or overrides the global setting.
+    Device and integration exclusions combine across scopes, and device
+    exclusions match case-insensitive fragments in manufacturer or model.
     """
     allowed_domains = set(enabled_domains) if enabled_domains is not None else None
     if not area_id or (allowed_domains is not None and not allowed_domains):
@@ -500,7 +516,9 @@ def discover_area_sensors(
         )
         if isinstance(entity_id, str)
     }
-    exclude_light_power |= bool(global_options.get(CONF_EXCLUDE_LIGHT_POWER, False))
+    exclude_light_power = _light_power_exclusion_enabled(
+        exclude_light_power, global_options.get(CONF_EXCLUDE_LIGHT_POWER, False)
+    )
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
     excluded_entity_ids.update(
@@ -686,7 +704,7 @@ def resolve_area_sensors(
         enabled_domains=enabled_domains,
         excluded_platforms=data.get(CONF_EXCLUDED_INTEGRATIONS),
         exclude_light_power=data.get(
-            CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER
+            CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
         ),
         excluded_device_matches=excluded_device_matches,
         excluded_entities=excluded,
@@ -753,7 +771,7 @@ def build_suggested_area_config(
         CONF_AUTO_DISCOVER_SENSORS: DEFAULT_AUTO_DISCOVER_SENSORS,
         CONF_AUTO_DISCOVER_DOMAINS: list(DISCOVERABLE_SENSOR_KEYS),
         CONF_EXPAND_GROUPS: DEFAULT_EXPAND_GROUPS,
-        CONF_EXCLUDE_LIGHT_POWER: DEFAULT_EXCLUDE_LIGHT_POWER,
+        CONF_EXCLUDE_LIGHT_POWER: DEFAULT_AREA_LIGHT_POWER_SETTING,
         CONF_DECAY_HALF_LIFE: DEFAULT_DECAY_HALF_LIFE,
     }
 

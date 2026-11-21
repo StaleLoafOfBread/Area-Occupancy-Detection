@@ -104,8 +104,12 @@ from custom_components.area_occupancy.const import (
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
+    DEFAULT_AREA_LIGHT_POWER_SETTING,
     DEFAULT_PURPOSE,
     DOMAIN,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
+    LIGHT_POWER_INCLUDE,
     SUBENTRY_TYPE_AREA,
 )
 from custom_components.area_occupancy.data.purpose import infer_purpose_from_name
@@ -3980,7 +3984,12 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
     exclude_light_marker = next(
         key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
     )
-    assert exclude_light_marker.default() is True
+    assert exclude_light_marker.default() == DEFAULT_AREA_LIGHT_POWER_SETTING
+    assert {option["value"] for option in exclude_light_marker.config["options"]} == {
+        LIGHT_POWER_FOLLOW_GLOBAL,
+        LIGHT_POWER_EXCLUDE,
+        LIGHT_POWER_INCLUDE,
+    }
 
     excluded_int_marker = next(
         key for key in schema if str(key) == CONF_EXCLUDED_INTEGRATIONS
@@ -3992,7 +4001,7 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
         {
             CONF_AREA_ID: office.id,
             CONF_PURPOSE: "work",
-            CONF_EXCLUDE_LIGHT_POWER: True,
+            CONF_EXCLUDE_LIGHT_POWER: LIGHT_POWER_EXCLUDE,
         }
     )
     sensors_res = await flow.async_step_area_motion(

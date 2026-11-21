@@ -20,14 +20,19 @@ from homeassistant.helpers import (
 from .const import (
     CONF_AREA_ID,
     CONF_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
     CONF_PERSON_SLEEP_SENSOR,
     CONF_PERSON_SLEEP_SENSORS,
     CONF_VERSION,
+    DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_MOTION_TIMEOUT,
     DOMAIN,
     LEGACY_DEFAULT_MOTION_TIMEOUT,
+    LIGHT_POWER_EXCLUDE,
+    LIGHT_POWER_FOLLOW_GLOBAL,
+    LIGHT_POWER_INCLUDE,
     SUBENTRY_TYPE_AREA,
 )
 from .db import DB_NAME
@@ -646,6 +651,43 @@ def _migrate_motion_timeout_default(
         )
 
 
+def _migrate_area_light_power_setting(
+    hass: HomeAssistant, config_entry: ConfigEntry
+) -> None:
+    """Replace the per-area light-power boolean with an explicit choice."""
+    for subentry in list(config_entry.subentries.values()):
+        if subentry.subentry_type != SUBENTRY_TYPE_AREA:
+            continue
+
+        data = dict(subentry.data)
+        old_setting = data.get(CONF_EXCLUDE_LIGHT_POWER, DEFAULT_EXCLUDE_LIGHT_POWER)
+        if old_setting is True:
+            setting = LIGHT_POWER_EXCLUDE
+        elif old_setting is False:
+            setting = LIGHT_POWER_FOLLOW_GLOBAL
+        elif old_setting in {
+            LIGHT_POWER_FOLLOW_GLOBAL,
+            LIGHT_POWER_EXCLUDE,
+            LIGHT_POWER_INCLUDE,
+        }:
+            continue
+        else:
+            _LOGGER.warning(
+                "Skipping invalid light-power exclusion setting for area %s: %r",
+                subentry.title,
+                old_setting,
+            )
+            continue
+
+        if data.get(CONF_EXCLUDE_LIGHT_POWER) != setting:
+            data[CONF_EXCLUDE_LIGHT_POWER] = setting
+            hass.config_entries.async_update_subentry(
+                config_entry,
+                subentry,
+                data=data,
+            )
+
+
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:  # noqa: C901
     """Migrate old entry to the new version.
 
@@ -739,6 +781,16 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             hass.config_entries.async_update_entry(config_entry, version=20)
             _LOGGER.debug(
                 "Migrated entry %s from v19 to v20 (motion timeout default)",
+                config_entry.entry_id,
+            )
+
+        # v20 -> v21: per-area light-power handling can follow global,
+        # explicitly exclude, or explicitly include.
+        if config_entry.version == 20:
+            _migrate_area_light_power_setting(hass, config_entry)
+            hass.config_entries.async_update_entry(config_entry, version=21)
+            _LOGGER.debug(
+                "Migrated entry %s from v20 to v21 (area light-power setting)",
                 config_entry.entry_id,
             )
 
