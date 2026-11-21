@@ -267,7 +267,9 @@
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Group expansion",
-                    "exclude_light_power": "Light-derived power sensor handling"
+                    "exclude_light_power": "Light-derived power sensor handling",
+                    "exclude_remote_locks": "Remote lock handling",
+                    "exclude_vehicle_detected": "Vehicle detected handling"
                 },
                 "data_description": {
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
@@ -275,7 +277,9 @@
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
+                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_remote_locks": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_vehicle_detected": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
                 },
                 "sections": {
                     "area_exclusions": {
@@ -516,14 +520,18 @@
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Group expansion",
                     "adjacent_areas": "Adjacent Areas",
-                    "exclude_light_power": "Light-derived power sensor handling"
+                    "exclude_light_power": "Light-derived power sensor handling",
+                    "exclude_remote_locks": "Remote lock handling",
+                    "exclude_vehicle_detected": "Vehicle detected handling"
                 },
                 "data_description": {
                     "purpose": "The primary purpose of this area determines decay behavior. Different purposes have different half-life values that affect how quickly occupancy probability decreases over time.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
-                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
+                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_remote_locks": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_vehicle_detected": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
                 },
                 "sections": {
                     "auto_discovery_types": {
@@ -840,7 +848,9 @@
                     "adjacent_areas": "Adjacent Areas",
                     "auto_discover_sensors": "Automatically discover sensors",
                     "expand_groups": "Group expansion",
-                    "exclude_light_power": "Light-derived power sensor handling"
+                    "exclude_light_power": "Light-derived power sensor handling",
+                    "exclude_remote_locks": "Remote lock handling",
+                    "exclude_vehicle_detected": "Vehicle detected handling"
                 },
                 "data_description": {
                     "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
@@ -848,7 +858,9 @@
                     "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                     "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                     "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
+                    "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_remote_locks": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_vehicle_detected": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
                 },
                 "sections": {
                     "auto_discovery_types": {
@@ -1126,10 +1138,14 @@
                         "description": "Rules that apply across every area.",
                         "data": {
                             "exclude_light_power": "Exclude light-derived power sensors by default",
+                            "exclude_remote_locks": "Exclude remote locks by default",
+                            "exclude_vehicle_detected": "Exclude vehicle detected sensors by default",
                             "excluded_device_matches": "Devices excluded by manufacturer or model"
                         },
                         "data_description": {
                             "exclude_light_power": "Do not auto add power readings from light bulbs. Occupancy sensors often feed into automated lights, thus causing a feedback loop if not excluded. Sets the default for areas set to `Follow Global`. ",
+                            "exclude_remote_locks": "Do not auto add lock entities marked as remote locks. Sets the default for areas set to `Follow Global`.",
+                            "exclude_vehicle_detected": "Do not auto add binary sensors marked as vehicle detected. Sets the default for areas set to `Follow Global`. ",
                             "excluded_device_matches": "Match manufacturer or model text across every area. Matching entities are ignored even if previously selected; area settings cannot override this."
                         }
                     },
@@ -1364,7 +1380,9 @@
                         "adjacent_areas": "Adjacent Areas",
                         "auto_discover_sensors": "Automatically discover sensors",
                         "expand_groups": "Group expansion",
-                        "exclude_light_power": "Light-derived power sensor handling"
+                        "exclude_light_power": "Light-derived power sensor handling",
+                    "exclude_remote_locks": "Remote lock handling",
+                    "exclude_vehicle_detected": "Vehicle detected handling"
                     },
                     "data_description": {
                         "area_id": "Select the Home Assistant area for this occupancy detection. The area name will be automatically used for the device and entities.",
@@ -1372,7 +1390,9 @@
                         "adjacent_areas": "Other configured areas that physically connect to this one (e.g. a hallway connected to a bedroom). Selections are mutual — adding an area here also adds this one to its neighbour list. The integration learns transition patterns between adjacent areas and uses them to boost a neighbour's probability and slow decay when its usual exits stay quiet.",
                         "auto_discover_sensors": "Automatically include supported sensors assigned to this Home Assistant area in addition to manual selections.",
                         "expand_groups": "Choose whether Home Assistant group entities are expanded into their domain-matching member entities. Follow Global uses the integration-wide setting; Expand and Keep override it. This applies to manually selected and automatically discovered groups.",
-                        "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
+                        "exclude_light_power": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_remote_locks": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area.",
+                    "exclude_vehicle_detected": "Follow Global uses the integration-wide default. Exclude or Include overrides it for automatic discovery in this area."
                     },
                     "sections": {
                         "auto_discovery_types": {
@@ -1681,6 +1701,36 @@
                     "name": "Closed door means still occupied",
                     "description": "Whether the area stays occupied while its doors stay closed after motion."
                 }
+            }
+        }
+    },
+    "selector": {
+        "group_expansion": {
+            "options": {
+                "follow_global": "Follow Global",
+                "expand": "Expand Groups Into Members",
+                "keep": "Keep Group Entities"
+            }
+        },
+        "light_power_exclusion": {
+            "options": {
+                "follow_global": "Follow Global",
+                "exclude": "Exclude Light Power Sensors",
+                "include": "Include Light Power Sensors"
+            }
+        },
+        "remote_lock_exclusion": {
+            "options": {
+                "follow_global": "Follow Global",
+                "exclude": "Exclude Remote Locks",
+                "include": "Include Remote Locks"
+            }
+        },
+        "vehicle_detected_exclusion": {
+            "options": {
+                "follow_global": "Follow Global",
+                "exclude": "Exclude Vehicle Detected Sensors",
+                "include": "Include Vehicle Detected Sensors"
             }
         }
     }

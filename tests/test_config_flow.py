@@ -4020,7 +4020,7 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
     schema = basics_form["data_schema"].schema
     expand_groups_marker = next(key for key in schema if str(key) == CONF_EXPAND_GROUPS)
     assert expand_groups_marker.default() == GROUPS_FOLLOW_GLOBAL
-    assert {option["value"] for option in expand_groups_marker.config["options"]} == {
+    assert set(expand_groups_marker.config["options"]) == {
         GROUPS_FOLLOW_GLOBAL,
         GROUPS_EXPAND,
         GROUPS_KEEP,
@@ -4029,7 +4029,7 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
         key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
     )
     assert exclude_light_marker.default() == DEFAULT_AREA_LIGHT_POWER_SETTING
-    assert {option["value"] for option in exclude_light_marker.config["options"]} == {
+    assert set(exclude_light_marker.config["options"]) == {
         LIGHT_POWER_FOLLOW_GLOBAL,
         LIGHT_POWER_EXCLUDE,
         LIGHT_POWER_INCLUDE,

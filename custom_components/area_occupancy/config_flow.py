@@ -117,6 +117,8 @@ from .const import (
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDE_REMOTE_LOCKS,
+    CONF_EXCLUDE_VEHICLE_DETECTED,
     CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSOR_TYPES,
@@ -188,6 +190,8 @@ from .const import (
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
     DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+    DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS,
+    DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED,
     DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_HEALTH_ENABLED,
     DEFAULT_MEDIA_ACTIVE_STATES,
@@ -1374,8 +1378,7 @@ def _create_basics_step_schema(
             and cleared its adjacency.
         hass: Optional Home Assistant instance used to pre-populate available
             integrations for exclusion.
-        global_options: Integration-wide discovery settings used to show the
-            effective value beside each Follow Global choice.
+        global_options: Integration-wide discovery settings used by discovery.
     """
     current = current or {}
     global_options = global_options or {}
@@ -1426,23 +1429,11 @@ def _create_basics_step_schema(
         GROUPS_KEEP,
     }:
         group_expansion = DEFAULT_AREA_EXPAND_GROUPS
-    global_group_expansion = global_options.get(
-        CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS
-    )
-    global_group_label = "On" if global_group_expansion else "Off"
     fields[vol.Optional(CONF_EXPAND_GROUPS, default=group_expansion)] = SelectSelector(
         SelectSelectorConfig(
-            options=[
-                SelectOptionDict(
-                    value=GROUPS_FOLLOW_GLOBAL,
-                    label=f"Follow Global ({global_group_label})",
-                ),
-                SelectOptionDict(
-                    value=GROUPS_EXPAND, label="Expand Groups Into Members"
-                ),
-                SelectOptionDict(value=GROUPS_KEEP, label="Keep Group Entities"),
-            ],
+            options=[GROUPS_FOLLOW_GLOBAL, GROUPS_EXPAND, GROUPS_KEEP],
             mode=SelectSelectorMode.DROPDOWN,
+            translation_key="group_expansion",
         )
     )
     light_power_setting = current.get(
@@ -1458,29 +1449,33 @@ def _create_basics_step_schema(
         LIGHT_POWER_INCLUDE,
     }:
         light_power_setting = DEFAULT_AREA_LIGHT_POWER_SETTING
-    global_light_power_exclusion = global_options.get(
-        CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
-    )
-    global_light_power_label = "On" if global_light_power_exclusion else "Off"
     fields[vol.Optional(CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting)] = (
         SelectSelector(
             SelectSelectorConfig(
-                options=[
-                    SelectOptionDict(
-                        value=LIGHT_POWER_FOLLOW_GLOBAL,
-                        label=f"Follow Global ({global_light_power_label})",
-                    ),
-                    SelectOptionDict(
-                        value=LIGHT_POWER_EXCLUDE, label="Exclude Light Power Sensors"
-                    ),
-                    SelectOptionDict(
-                        value=LIGHT_POWER_INCLUDE, label="Include Light Power Sensors"
-                    ),
-                ],
+                options=[LIGHT_POWER_FOLLOW_GLOBAL, LIGHT_POWER_EXCLUDE, LIGHT_POWER_INCLUDE],
                 mode=SelectSelectorMode.DROPDOWN,
+                translation_key="light_power_exclusion",
             )
         )
     )
+    for key, translation_key in (
+        (CONF_EXCLUDE_REMOTE_LOCKS, "remote_lock_exclusion"),
+        (CONF_EXCLUDE_VEHICLE_DETECTED, "vehicle_detected_exclusion"),
+    ):
+        setting = current.get(key, LIGHT_POWER_FOLLOW_GLOBAL)
+        if setting is True:
+            setting = LIGHT_POWER_EXCLUDE
+        elif setting is False:
+            setting = LIGHT_POWER_FOLLOW_GLOBAL
+        if setting not in {LIGHT_POWER_FOLLOW_GLOBAL, LIGHT_POWER_EXCLUDE, LIGHT_POWER_INCLUDE}:
+            setting = LIGHT_POWER_FOLLOW_GLOBAL
+        fields[vol.Optional(key, default=setting)] = SelectSelector(
+            SelectSelectorConfig(
+                options=[LIGHT_POWER_FOLLOW_GLOBAL, LIGHT_POWER_EXCLUDE, LIGHT_POWER_INCLUDE],
+                mode=SelectSelectorMode.DROPDOWN,
+                translation_key=translation_key,
+            )
+        )
     area_exclusions = {
         **_create_exclusion_fields(current, hass),
     }
@@ -1962,6 +1957,8 @@ def _sync_discovered_and_excluded(
                 exclude_light_power=draft.get(
                     CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
                 ),
+                exclude_remote_locks=draft.get(CONF_EXCLUDE_REMOTE_LOCKS, LIGHT_POWER_FOLLOW_GLOBAL),
+                exclude_vehicle_detected=draft.get(CONF_EXCLUDE_VEHICLE_DETECTED, LIGHT_POWER_FOLLOW_GLOBAL),
                 excluded_device_matches=excluded_device_matches,
                 excluded_entities=[
                     *(draft.get(CONF_EXCLUDED_SENSORS) or []),
@@ -2427,6 +2424,14 @@ def _create_global_exclusions_schema(
                             CONF_EXCLUDE_LIGHT_POWER,
                             DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
                         ),
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_EXCLUDE_REMOTE_LOCKS,
+                        default=defaults.get(CONF_EXCLUDE_REMOTE_LOCKS, DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS),
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_EXCLUDE_VEHICLE_DETECTED,
+                        default=defaults.get(CONF_EXCLUDE_VEHICLE_DETECTED, DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED),
                     ): BooleanSelector(),
                     device_key: device_selector,
                 }

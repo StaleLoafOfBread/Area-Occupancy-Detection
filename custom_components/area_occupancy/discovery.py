@@ -38,6 +38,8 @@ from .const import (
     CONF_DECAY_HALF_LIFE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDE_REMOTE_LOCKS,
+    CONF_EXCLUDE_VEHICLE_DETECTED,
     CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSOR_TYPES,
@@ -65,6 +67,8 @@ from .const import (
     DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
     DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+    DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS,
+    DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED,
     DEFAULT_GLOBAL_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -417,6 +421,34 @@ def _is_light_power_sensor(
     return False
 
 
+def _excluder_match_text(hass: HomeAssistant, entry: er.RegistryEntry) -> str:
+    """Collect searchable entity and device metadata for semantic excluders."""
+    state = hass.states.get(entry.entity_id)
+    attrs = getattr(state, "attributes", None) if state else None
+    device = dr.async_get(hass).async_get(entry.device_id) if entry.device_id else None
+    values = [entry.entity_id, entry.original_name or "", entry.name or ""]
+    if isinstance(attrs, Mapping):
+        values.extend(str(attrs.get(key, "")) for key in ("friendly_name", "source", "entity_id"))
+    if device:
+        values.extend((device.name or "", device.name_by_user or "", device.model or ""))
+    return " ".join(values).lower().replace("-", "_").replace(" ", "_")
+
+
+def _is_remote_lock(entry: er.RegistryEntry, text: str) -> bool:
+    """Identify lock entities explicitly described as remote locks."""
+    return entry.domain == "lock" and any(
+        marker in text for marker in ("remote_lock", "remote.lock", "remote-control", "remote_control")
+    )
+
+
+def _is_vehicle_detected(entry: er.RegistryEntry, text: str) -> bool:
+    """Identify binary sensors explicitly describing vehicle detection."""
+    if entry.domain != "binary_sensor":
+        return False
+    compact = text.replace("_", " ")
+    return "vehicle detected" in compact or "car detected" in compact
+
+
 def _is_ineligible_entry(
     hass: HomeAssistant,
     entry: er.RegistryEntry,
@@ -540,6 +572,8 @@ def discover_area_sensors(
     enabled_domains: Collection[str] | None = None,
     excluded_platforms: Collection[str] | None = None,
     exclude_light_power: bool | str = DEFAULT_AREA_LIGHT_POWER_SETTING,
+    exclude_remote_locks: bool | str = LIGHT_POWER_FOLLOW_GLOBAL,
+    exclude_vehicle_detected: bool | str = LIGHT_POWER_FOLLOW_GLOBAL,
     excluded_device_matches: Collection[str] | None = None,
     excluded_entities: Collection[str] | None = None,
     global_options: Mapping[str, Any] | None = None,
@@ -581,6 +615,14 @@ def discover_area_sensors(
             CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
         ),
     )
+    exclude_remote_locks = _light_power_exclusion_enabled(
+        exclude_remote_locks,
+        global_options.get(CONF_EXCLUDE_REMOTE_LOCKS, DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS),
+    )
+    exclude_vehicle_detected = _light_power_exclusion_enabled(
+        exclude_vehicle_detected,
+        global_options.get(CONF_EXCLUDE_VEHICLE_DETECTED, DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED),
+    )
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
     excluded_entity_ids.update(
@@ -599,6 +641,11 @@ def discover_area_sensors(
 
     for entry in sorted(registry.entities.values(), key=lambda item: item.entity_id):
         if _is_ineligible_entry(hass, entry, excluded_set):
+            continue
+        searchable_text = _excluder_match_text(hass, entry)
+        if (exclude_remote_locks and _is_remote_lock(entry, searchable_text)) or (
+            exclude_vehicle_detected and _is_vehicle_detected(entry, searchable_text)
+        ):
             continue
 
         device = devices.async_get(entry.device_id) if entry.device_id else None
@@ -624,6 +671,14 @@ def discover_area_sensors(
                 required_domain=required_domain,
                 registry=registry,
             ):
+                member_entry = _lookup_registry_entry(hass, member_id, registry)
+                if member_entry is not None:
+                    member_text = _excluder_match_text(hass, member_entry)
+                    if (exclude_remote_locks and _is_remote_lock(member_entry, member_text)) or (
+                        exclude_vehicle_detected
+                        and _is_vehicle_detected(member_entry, member_text)
+                    ):
+                        continue
                 key = _classify_entity(
                     hass,
                     registry,
@@ -789,6 +844,8 @@ def resolve_area_sensors(
         exclude_light_power=data.get(
             CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
         ),
+        exclude_remote_locks=data.get(CONF_EXCLUDE_REMOTE_LOCKS, "follow_global"),
+        exclude_vehicle_detected=data.get(CONF_EXCLUDE_VEHICLE_DETECTED, "follow_global"),
         excluded_device_matches=excluded_device_matches,
         excluded_entities=excluded,
         global_options=global_options,
