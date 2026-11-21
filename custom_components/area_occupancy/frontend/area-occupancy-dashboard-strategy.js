@@ -87,15 +87,15 @@ function statusTimerCard(area, entities) {
     };
     if (!occupied) {
       cleanup();
-      return "<span style='opacity:.65'>⚪ " + activity + " · " + counts + " · " + Math.round(probability) + "% / " + Math.round(threshold) + "%</span>";
+      return "<span style='opacity:.65'>⚪ " + activity + "<br>" + Math.round(probability) + "% / " + Math.round(threshold) + "%<br>" + counts + "</span>";
     }
     if (primary.length) {
       cleanup();
-      return "<span style='color:#4caf50'>🟢 " + activity + " · " + counts + " · " + Math.round(probability) + "% / " + Math.round(threshold) + "%</span>";
+      return "<span style='color:#4caf50'>🟢 " + activity + "<br>" + Math.round(probability) + "% / " + Math.round(threshold) + "%<br>" + counts + "</span>";
     }
     if (prior >= threshold) {
       cleanup();
-      return "<span style='color:#ffc107'>🟡 " + activity + " · Learned prior · " + counts + " · " + Math.round(probability) + "% / " + Math.round(threshold) + "%</span>";
+      return "<span style='color:#ffc107'>🟡 " + activity + " · Learned prior<br>" + Math.round(probability) + "% / " + Math.round(threshold) + "%<br>" + counts + "</span>";
     }
     if (decaying.length) {
       const dominant = decaying.reduce((best, item) => parseFloat(item.decay_factor || 0) > parseFloat(best.decay_factor || 0) ? item : best);
@@ -122,11 +122,11 @@ function statusTimerCard(area, entities) {
           if (node) node.textContent = value >= 60 ? "~" + Math.floor(value / 60) + "m " + (value % 60) + "s" : (value ? "~" + value + "s" : "< 10s");
         }, 1000);
       }
-      return "<span style='color:#ff9800'>🟠 " + activity + " · ⏳ <span class='cd-txt'>" + time + "</span> · " + counts + " · " + Math.round(probability) + "% / " + Math.round(threshold) + "%</span>";
+      return "<span style='color:#ff9800'>🟠 " + activity + " · ⏳ <span class='cd-txt'>" + time + "</span><br>" + Math.round(probability) + "% / " + Math.round(threshold) + "%<br>" + counts + "</span>";
     }
     cleanup();
     const reason = environmental.length ? "Environmental support" : "Prior support";
-    return "<span style='color:#ffc107'>🟡 " + activity + " · " + reason + " · " + counts + " · " + Math.round(probability) + "% / " + Math.round(threshold) + "%</span>";
+    return "<span style='color:#ffc107'>🟡 " + activity + " · " + reason + "<br>" + Math.round(probability) + "% / " + Math.round(threshold) + "%<br>" + counts + "</span>";
   ]]]`;
   const bar = `[[[
     const occupied = states[${statusId}]?.state === "on";
@@ -159,14 +159,14 @@ function statusTimerCard(area, entities) {
     triggers_update: [status, probability, threshold, activity].filter(Boolean),
     name: area.name,
     icon: "mdi:home-account",
-    tap_action: { action: "more-info" },
+    tap_action: { action: "navigate", navigation_path: `/area-occupancy/area-${slug(area.name)}-${slug(area.area_id || area.id)}` },
     custom_fields: { status: reading, bar },
     styles: {
       card: [{ "border-radius": "16px" }, { padding: "10px 14px" }],
-      grid: [{ "grid-template-areas": "'i n' 'i status' 'bar bar'" }, { "grid-template-columns": "32px 1fr" }, { "grid-template-rows": "auto auto 6px" }, { "row-gap": "6px" }],
+      grid: [{ "grid-template-areas": "'i n' 'i status' 'status status' 'bar bar'" }, { "grid-template-columns": "32px 1fr" }, { "grid-template-rows": "auto auto auto 6px" }, { "row-gap": "8px" }],
       icon: [{ color: "var(--primary-color)" }, { width: "22px" }],
       name: [{ "justify-self": "start" }, { "font-weight": "600" }],
-      custom_fields: { status: [{ "grid-area": "status" }, { "justify-self": "start" }, { "font-size": "12px" }], bar: [{ "grid-area": "bar" }, { width: "100%" }] },
+      custom_fields: { status: [{ "grid-area": "status" }, { "justify-self": "start" }, { "font-size": "12px" }, { "line-height": "1.6" }, { "white-space": "normal" }], bar: [{ "grid-area": "bar" }, { width: "100%" }] },
     },
   };
 }
@@ -230,7 +230,7 @@ ${activityRow}
   };
 }
 
-function areaView(area, entities) {
+function areaView(area, entities, comfortThreshold = 50) {
   const status = findEntity(entities, "occupancy_status");
   const probability = findEntity(entities, "occupancy_probability");
   const threshold = findEntity(entities, "occupancy_threshold");
@@ -242,26 +242,22 @@ function areaView(area, entities) {
     entityCard(activity, "Detected activity"),
   ];
   const controls = sections(cards);
-  const diagnostics = entities
-    .filter((entity) => entity.entity_category === "diagnostic" && !entity.disabled_by)
-    .map((entity) => entity.entity_id);
-  const inputs = area.area_id
+const inputs = area.area_id
     ? { include: [{ area: area.area_id }], exclude: [{ integration: DOMAIN }] }
     : undefined;
   const more = [];
-  more.push(areaMetadataCard(area, entities));
-  if (inputs) more.push({ type: "custom:auto-entities", card: { type: "entities", title: "Area sensors" }, filter: { ...inputs, include: inputs.include.map((item) => ({ ...item, options: {} })) }, sort: { method: "name" } });
-  if (diagnostics.length) more.push({ type: "entities", title: "Diagnostics", entities: diagnostics });
-  if (probability || threshold || status || activity) {
+  if (inputs) more.push({ type: "custom:auto-entities", card: { type: "entities", title: "Sensors & Decay", state_color: true }, filter: { ...inputs, include: inputs.include.map((item) => ({ ...item, options: {} })) }, sort: { method: "name" } });
+if (probability || threshold || status || activity) {
     const historyEntities = [probability, threshold, status, activity].filter(Boolean);
     more.push({ type: "history-graph", title: "Last 24 hours", hours_to_show: 24, entities: historyEntities });
   }
-  more.push({ type: "custom:area-occupancy-time-priors-card", title: `${area.name} weekly forecast`, area_id: area.area_id || identifiers(area.device)[0] });
+  more.push({ type: "custom:area-occupancy-time-priors-card", title: `${area.name} weekly forecast`, area_id: area.area_id || identifiers(area.device)[0], threshold: comfortThreshold });
   return {
     title: area.name,
     path: `area-${slug(area.name)}-${slug(area.area_id || area.id)}`,
     icon: area.icon || "mdi:home-outline",
     type: "sections",
+    subview: true,
     max_columns: 3,
     sections: [...controls, ...sections(more, 3)],
   };
@@ -305,14 +301,6 @@ class AreaOccupancyDashboardStrategy extends HTMLElement {
       groups.get(key).areas.push(item);
     }
     const forecastAreas = configured.map(({ area, id }) => ({ area, id }));
-    const thresholdSections = [...groups.values()].map((group) => {
-      const cards = group.areas.map(({ area, entities }) =>
-        entityCard(findEntity(entities, "occupancy_threshold"), area.name)).filter(Boolean);
-      return cards.length ? { type: "grid", cards: [
-        { type: "heading", heading: group.label, heading_style: "title" },
-        ...cards,
-      ] } : undefined;
-    }).filter(Boolean);
     const histories = configured.map(({ area, entities }) => {
       const probability = findEntity(entities, "occupancy_probability");
       const status = findEntity(entities, "occupancy_status");
@@ -359,39 +347,7 @@ class AreaOccupancyDashboardStrategy extends HTMLElement {
         ],
       } : undefined;
     }).filter(Boolean);
-    const statusSection = statusFloorSections.length ? [
-      {
-        type: "grid",
-        column_span: 3,
-        cards: [
-          { type: "heading", heading: "Area Status & Timers", heading_style: "title", icon: "mdi:timer-outline" },
-          { type: "markdown", content: "Each card shows the area's current detected activity and occupancy probability. 🟢 live primary evidence · 🟠 decaying evidence with an estimated countdown · 🟡 environmental or learned-prior support · ⚪ below threshold. Counts: **Primary** = active non-environmental inputs; **Decaying** = fading inputs; **Environmental** = active sensor-domain inputs. Orange countdowns are estimates; live evidence or a learned prior above threshold can keep an area occupied longer." },
-        ],
-      },
-      ...statusFloorSections,
-    ] : [];
-    const aggregateMetadataSections = aggregateDevices.map((device) => {
-      const entities = entitiesForDevice(device, registry)
-        .filter((entity) => !entity.disabled_by)
-        .map((entity) => entity.entity_id);
-      return entities.length ? { type: "grid", cards: [
-        { type: "heading", heading: device.name, heading_style: "title" },
-        { type: "entities", entities },
-      ] } : undefined;
-    }).filter(Boolean);
-    const metadataSections = [...aggregateMetadataSections, ...configured.map(({ area, entities }) => ({
-      type: "grid",
-      cards: [
-        { type: "heading", heading: area.name, heading_style: "title" },
-        ...[
-          entityCard(findEntity(entities, "occupancy_status"), "Occupancy"),
-          entityCard(findEntity(entities, "occupancy_probability"), "Probability"),
-          entityCard(findEntity(entities, "detected_activity"), "Detected activity"),
-          entityCard(findEntity(entities, "occupancy_threshold"), "Threshold"),
-          areaMetadataCard(area, entities),
-        ].filter(Boolean),
-      ],
-    }))];
+    const statusSection = statusFloorSections;
     const historySections = sections([
       aggregateProbabilities.length ? { type: "history-graph", title: "Whole home & floor probabilities (24h)", hours_to_show: 24, entities: aggregateProbabilities } : undefined,
       ...floorHistories,
@@ -399,22 +355,23 @@ class AreaOccupancyDashboardStrategy extends HTMLElement {
       activityHistory.length ? { type: "history-graph", title: "Detected activity by area (24h)", hours_to_show: 24, entities: activityHistory } : undefined,
       ...histories,
     ], 3);
+    const configuredThresholds = configured.map(({ entities }) => {
+      const id = findEntity(entities, "occupancy_threshold");
+      const value = id ? Number(hass.states[id]?.state) : NaN;
+      return Number.isFinite(value) ? value : undefined;
+    }).filter((value) => value !== undefined);
+    const comfortThreshold = configuredThresholds.length
+      ? configuredThresholds.reduce((sum, value) => sum + value, 0) / configuredThresholds.length
+      : 50;
     const views = [
       { title: "Status", path: "status", icon: "mdi:home-account", type: "sections", max_columns: 3, sections: statusSection },
-      { title: "Forecast", path: "forecast", icon: "mdi:chart-box", type: "sections", max_columns: 2, sections: sections([{ type: "custom:area-occupancy-time-priors-card", title: "Weekly occupancy forecast" }], 2) },
-      { title: "Thresholds", path: "thresholds", icon: "mdi:tune-variant", type: "sections", max_columns: 4, sections: thresholdSections },
+      { title: "Forecast", path: "forecast", icon: "mdi:chart-box", type: "sections", max_columns: 4, sections: [{ type: "grid", column_span: 4, cards: [{ type: "custom:area-occupancy-time-priors-card", title: "Weekly occupancy forecast", threshold: comfortThreshold }] }] },
       { title: "History", path: "history", icon: "mdi:chart-line", type: "sections", max_columns: 3, sections: historySections },
-      { title: "Metadata", path: "metadata", icon: "mdi:database-eye", type: "sections", max_columns: 4, sections: metadataSections },
-      { title: "Diagnostics", path: "diagnostics", icon: "mdi:clipboard-pulse", type: "sections", max_columns: 3, sections: sections([{
-        type: "custom:auto-entities",
-        card: { type: "entities", title: "Enabled diagnostic entities" },
-        show_empty: false,
-        filter: { include: [{ integration: DOMAIN, entity_category: "diagnostic" }] },
-        sort: { method: "name" },
-      }], 3) },
       ...forecastAreas.map(({ area, id }) => {
         const device = areaDevices.find((candidate) => identifiers(candidate).includes(id));
-        return areaView({ ...area, device, id }, entitiesForDevice(device, registry));
+        const areaThresholdId = findEntity(entitiesForDevice(device, registry), "occupancy_threshold");
+        const areaThreshold = areaThresholdId ? Number(hass.states[areaThresholdId]?.state) : NaN;
+        return areaView({ ...area, device, id }, entitiesForDevice(device, registry), Number.isFinite(areaThreshold) ? areaThreshold : 50);
       }),
     ];
     return { title: config.title || "Area Occupancy", views };
