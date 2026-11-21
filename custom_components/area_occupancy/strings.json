@@ -322,6 +322,9 @@
                         "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
                         "data": {
                             "auto_added_entities": "Auto-added sensors"
+                        },
+                        "data_description": {
+                            "auto_added_entities": "Entities automatically added by discovery. This field is read-only."
                         }
                     }
                 }
@@ -378,12 +381,16 @@
                             "custom_binary_sensors": "Custom Binary Sensors",
                             "custom_binary_active_states": "Custom Binary Active States",
                             "weight_custom_binary": "Custom Binary Weight",
-                            "custom_numeric_sensors": "Custom Numeric Sensors",
-                            "custom_numeric_active_min": "Custom Numeric Active Minimum",
-                            "custom_numeric_active_max": "Custom Numeric Active Maximum",
-                            "weight_custom_numeric": "Custom Numeric Weight"
+                            "custom_numeric_sensors": "Custom Numeric Sensors"
                         },
                         "data_description": {
+                            "auto_added_windows_and_doors": "Entities automatically added by discovery for doors, windows, locks, and covers.",
+                            "auto_added_media": "Entities automatically added by discovery for media players.",
+                            "auto_added_appliances": "Entities automatically added by discovery for appliances.",
+                            "auto_added_environmental": "Entities automatically added by discovery for environmental sensors.",
+                            "auto_added_power": "Entities automatically added by discovery for power sensors.",
+                            "auto_added_wifi_clients": "Entities automatically added by discovery for Wi-Fi client sensors.",
+                            "auto_added_custom": "Entities automatically added by discovery for custom sensors.",
                             "door_active_state": "This is the state of the door that will be used to detect occupancy.",
                             "weight_door": "The weight given to door sensor inputs in the occupancy calculation.",
                             "lock_active_state": "This is the state of the lock that will be used to detect occupancy.",
@@ -872,6 +879,9 @@
                         "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
                         "data": {
                             "auto_added_entities": "Auto-added sensors"
+                        },
+                        "data_description": {
+                            "auto_added_entities": "Entities automatically added by discovery. This field is read-only."
                         }
                     }
                 }
@@ -1349,6 +1359,9 @@
                             "description": "Added by discovery settings. Change discovery or exclusions in Area Basics to remove these sensors.",
                             "data": {
                                 "auto_added_entities": "Auto-added sensors"
+                            },
+                            "data_description": {
+                                "auto_added_entities": "Entities automatically added by discovery. This field is read-only."
                             }
                         }
                     }

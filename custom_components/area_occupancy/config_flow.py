@@ -63,8 +63,6 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
-    TextSelector,
-    TextSelectorConfig,
     TimeSelector,
 )
 
@@ -1425,7 +1423,7 @@ def _create_basics_step_schema(
 def _create_motion_step_schema(
     hass: HomeAssistant,
     include_entities: dict[str, list[str]] | None = None,
-    auto_added_entities: str = "None",
+    auto_added_entities: list[str] | None = None,
 ) -> dict[vol.Marker, Any]:
     """Create schema for wizard step 2: motion sensor configuration."""
     if include_entities is None:
@@ -1475,26 +1473,29 @@ def _create_motion_step_schema(
         ),
     }
 
-    return {
-        vol.Required(AUTO_ADDED_SECTION): section(
+    result: dict[vol.Marker, Any] = {}
+    if auto_added_entities:
+        result[vol.Required(AUTO_ADDED_SECTION)] = section(
             vol.Schema(
                 {
                     vol.Optional(
                         AUTO_ADDED_ENTITIES_FIELD,
-                        description={"suggested_value": auto_added_entities},
-                    ): TextSelector(TextSelectorConfig(multiline=True, read_only=True))
+                        default=auto_added_entities,
+                    ): EntitySelector(
+                        EntitySelectorConfig(multiple=True, read_only=True)
+                    )
                 }
             )
-        ),
-        vol.Required(EXPLICIT_SECTION): section(vol.Schema(fields)),
-    }
+        )
+    result[vol.Required(EXPLICIT_SECTION)] = section(vol.Schema(fields))
+    return result
 
 
 def _create_sensors_step_schema(
     hass: HomeAssistant,
     include_entities: dict[str, list[str]] | None = None,
     groups: tuple[str, ...] | list[str] | None = None,
-    auto_added_entities: dict[str, str] | None = None,
+    auto_added_entities: dict[str, list[str]] | None = None,
 ) -> dict[vol.Marker, Any]:
     """Create schema for wizard step 3: additional sensors with sections.
 
@@ -1503,7 +1504,7 @@ def _create_sensors_step_schema(
         include_entities: Pre-computed candidate entities per channel.
         groups: Subset of ``SENSOR_GROUPS`` to render. ``None`` renders all
             groups (the add wizard); a single group renders the edit hub spoke.
-        auto_added_entities: Read-only summaries of discovered entities per group.
+        auto_added_entities: Read-only discovered entity IDs per group.
     """
     if include_entities is None:
         include_entities = _get_include_entities(hass)
@@ -1560,13 +1561,15 @@ def _create_sensors_step_schema(
     }
     explicit_fields: dict[vol.Marker, Any] = {}
     for group in selected:
-        if group_text := (auto_added_entities or {}).get(group):
+        if group_ids := (auto_added_entities or {}).get(group):
             explicit_fields[
                 vol.Optional(
                     f"{AUTO_ADDED_FIELD_PREFIX}{group}",
-                    description={"suggested_value": group_text},
+                    default=group_ids,
                 )
-            ] = TextSelector(TextSelectorConfig(multiline=True, read_only=True))
+            ] = EntitySelector(
+                EntitySelectorConfig(multiple=True, read_only=True)
+            )
         explicit_fields.update(builders[group]().schema)
     return {
         vol.Required(EXPLICIT_SECTION): section(
@@ -1946,31 +1949,28 @@ def _explicit_sensor_config(
     return explicit
 
 
-def _auto_added_sensor_text(
-    hass: HomeAssistant,
+def _auto_added_sensor_ids(
     config: dict[str, Any],
     sensor_keys: tuple[str, ...],
-) -> str:
-    """Format automatic sensor additions for the read-only form section."""
+) -> list[str]:
+    """Return entity IDs that discovery added for the requested sensor keys."""
     raw_auto = config.get(CONF_AUTO_ADDED_SENSORS)
     tracked_auto = raw_auto if isinstance(raw_auto, dict) else {}
-    lines: list[str] = []
+    entity_ids: list[str] = []
     for key in sensor_keys:
         selected = config.get(key)
         automatic = tracked_auto.get(key, [])
         if not isinstance(selected, list) or not isinstance(automatic, list):
             continue
         automatic_ids = set(automatic)
-        entities = [entity_id for entity_id in selected if entity_id in automatic_ids]
-        if not entities:
-            continue
-        label = _AUTO_DISCOVER_DOMAIN_LABELS.get(key, key.replace("_", " ").title())
-        lines.append(f"{label}:")
-        for entity_id in entities:
-            state = hass.states.get(entity_id)
-            name = state.name if state and state.name else entity_id
-            lines.append(f"- {name} ({entity_id})")
-    return "\n".join(lines) or "None"
+        entity_ids.extend(
+            entity_id
+            for entity_id in selected
+            if entity_id in automatic_ids
+            and isinstance(entity_id, str)
+            and entity_id not in entity_ids
+        )
+    return entity_ids
 
 
 def _editable_form_input(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -2885,11 +2885,11 @@ class BaseOccupancyFlow:
             CONF_MOTION_PROB_GIVEN_FALSE,
         }
         resolved_draft = self._resolve_area_sensors(self._area_config_draft)
-        auto_added_text = _auto_added_sensor_text(
-            self.hass, resolved_draft, (CONF_MOTION_SENSORS,)
+        auto_added_ids = _auto_added_sensor_ids(
+            resolved_draft, (CONF_MOTION_SENSORS,)
         )
         schema_dict = _create_motion_step_schema(
-            self.hass, auto_added_entities=auto_added_text
+            self.hass, auto_added_entities=auto_added_ids
         )
         base_schema = vol.Schema(schema_dict)
         if user_input is not None:
@@ -2964,22 +2964,20 @@ class BaseOccupancyFlow:
                     return await self.async_step_area_behavior()
 
         resolved_draft = self._resolve_area_sensors(self._area_config_draft)
-        auto_added_text = {
+        auto_added_ids = {
             group: text
             for group in groups
             if (
-                text := _auto_added_sensor_text(
-                    self.hass,
+                text := _auto_added_sensor_ids(
                     resolved_draft,
                     SENSOR_GROUP_KEYS.get(group, ()),
                 )
             )
-            != "None"
         }
         schema_dict = _create_sensors_step_schema(
             self.hass,
             groups=groups,
-            auto_added_entities=auto_added_text,
+            auto_added_entities=auto_added_ids,
         )
         base_schema = vol.Schema(schema_dict)
 

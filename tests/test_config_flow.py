@@ -23,7 +23,7 @@ from custom_components.area_occupancy.config_flow import (
     AreaOccupancyOptionsFlow,
     AreaSubentryFlowHandler,
     BaseOccupancyFlow,
-    _auto_added_sensor_text,
+    _auto_added_sensor_ids,
     _build_area_description_placeholders,
     _create_area_selector_schema,
     _create_basics_step_schema,
@@ -3257,9 +3257,10 @@ async def test_motion_step_separates_readonly_discovery_from_explicit_selection(
             if marker.schema == AUTO_ADDED_ENTITIES_FIELD
         )
         assert auto_section.schema.schema[auto_marker].config["read_only"]
-        assert (
-            "binary_sensor.motion_auto_1" in auto_marker.description["suggested_value"]
-        )
+        assert auto_marker.default() == [
+            "binary_sensor.motion_auto_1",
+            "binary_sensor.motion_auto_2",
+        ]
 
         explicit_section = next(
             value
@@ -3294,6 +3295,31 @@ async def test_motion_step_separates_readonly_discovery_from_explicit_selection(
         "binary_sensor.motion_auto_1",
         "binary_sensor.motion_auto_2",
     ]
+
+
+def test_auto_added_entity_fields_are_omitted_when_empty(
+    hass,
+) -> None:
+    """No read-only entity picker is rendered when discovery adds nothing."""
+    motion_schema = _create_motion_step_schema(hass, auto_added_entities=[])
+    assert [marker.schema for marker in motion_schema] == [EXPLICIT_SECTION]
+
+    sensors_schema = vol.Schema(
+        _create_sensors_step_schema(
+            hass,
+            groups=("environmental",),
+            auto_added_entities={"environmental": []},
+        )
+    )
+    explicit_section = next(
+        value
+        for marker, value in sensors_schema.schema.items()
+        if marker.schema == EXPLICIT_SECTION
+    )
+    assert not any(
+        str(marker).startswith(AUTO_ADDED_FIELD_PREFIX)
+        for marker in explicit_section.schema.schema
+    )
 
 
 def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
@@ -3403,8 +3429,10 @@ async def test_sensors_step_separates_readonly_discovery_from_explicit_selection
             if marker.schema == CONF_TEMPERATURE_SENSORS
         )
         assert explicit_section.schema.schema[auto_marker].config["read_only"]
-        assert "sensor.temp_auto" in auto_marker.description["suggested_value"]
-        assert "sensor.temp_ignore" in auto_marker.description["suggested_value"]
+        assert auto_marker.default() == [
+            "sensor.temp_auto",
+            "sensor.temp_ignore",
+        ]
         assert field_markers.index(auto_marker) < field_markers.index(temp_marker)
         assert temp_marker.description is None
 
@@ -3446,10 +3474,8 @@ def test_sensor_sections_format_automatic_and_explicit_entities(
 
     explicit = _explicit_sensor_config(resolved, (CONF_MOTION_SENSORS,))
     assert explicit[CONF_MOTION_SENSORS] == ["binary_sensor.motion_explicit"]
-    auto_text = _auto_added_sensor_text(flow.hass, resolved, (CONF_MOTION_SENSORS,))
-    assert auto_text == (
-        "Motion & Presence:\n- binary_sensor.motion_auto (binary_sensor.motion_auto)"
-    )
+    auto_ids = _auto_added_sensor_ids(resolved, (CONF_MOTION_SENSORS,))
+    assert auto_ids == ["binary_sensor.motion_auto"]
 
 
 def _register_area_with_motion(
@@ -3858,7 +3884,7 @@ async def test_basics_step_unchecking_domain_and_excluding_integration(
         for key in motion_auto_section.schema.schema
         if str(key) == AUTO_ADDED_ENTITIES_FIELD
     )
-    assert pir.entity_id in motion_auto_marker.description["suggested_value"]
+    assert pir.entity_id in motion_auto_marker.default()
 
     sensors_res = await flow.async_step_area_motion(
         {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
@@ -4017,7 +4043,7 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
         for key in auto_section.schema.schema
         if str(key) == AUTO_ADDED_ENTITIES_FIELD
     )
-    assert desk_power.entity_id in auto_marker.description["suggested_value"]
+    assert desk_power.entity_id in auto_marker.default()
     explicit_section = next(
         value
         for key, value in sensors_res["data_schema"].schema.items()
