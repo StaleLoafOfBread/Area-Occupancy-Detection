@@ -43,7 +43,7 @@ DEVICE_SW_VERSION: Final = "2026.11.1-pre14"
 # into its own config subentry (see migrations.py). Bumping this no longer
 # costs anyone their learned history -- that is what DB_SCHEMA_VERSION below
 # is for.
-CONF_VERSION: Final = 21
+CONF_VERSION: Final = 22
 CONF_VERSION_MINOR: Final = 0
 # Version stamp of the SQLite schema, stored in the ``metadata`` table as
 # ``db_version``. Deliberately independent of ``CONF_VERSION`` (the config
@@ -99,6 +99,9 @@ LIGHT_POWER_FOLLOW_GLOBAL: Final = "follow_global"
 LIGHT_POWER_EXCLUDE: Final = "exclude"
 LIGHT_POWER_INCLUDE: Final = "include"
 CONF_EXPAND_GROUPS: Final = "expand_groups"
+GROUPS_FOLLOW_GLOBAL: Final = "follow_global"
+GROUPS_EXPAND: Final = "expand"
+GROUPS_KEEP: Final = "keep"
 CONF_MOTION_SENSORS: Final = "motion_sensors"
 CONF_MOTION_PROB_GIVEN_TRUE: Final = "motion_prob_given_true"
 CONF_MOTION_PROB_GIVEN_FALSE: Final = "motion_prob_given_false"
@@ -183,7 +186,8 @@ DEFAULT_EXCLUDE_LIGHT_POWER: Final[bool] = True
 DEFAULT_AREA_LIGHT_POWER_SETTING: Final = LIGHT_POWER_FOLLOW_GLOBAL
 DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER: Final[bool] = False
 DEFAULT_EXCLUDED_DEVICE_MATCHES: Final[tuple[str, ...]] = ()
-DEFAULT_EXPAND_GROUPS: Final[bool] = True
+DEFAULT_GLOBAL_EXPAND_GROUPS: Final[bool] = True
+DEFAULT_AREA_EXPAND_GROUPS: Final[str] = GROUPS_FOLLOW_GLOBAL
 DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose

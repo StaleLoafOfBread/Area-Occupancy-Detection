@@ -57,14 +57,18 @@ from .const import (
     CONF_VOC_SENSORS,
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_SENSORS,
+    DEFAULT_AREA_EXPAND_GROUPS,
     DEFAULT_AREA_LIGHT_POWER_SETTING,
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
-    DEFAULT_EXPAND_GROUPS,
+    DEFAULT_GLOBAL_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
+    GROUPS_EXPAND,
+    GROUPS_FOLLOW_GLOBAL,
+    GROUPS_KEEP,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
     LIGHT_POWER_INCLUDE,
@@ -477,11 +481,24 @@ def _light_power_exclusion_enabled(
     raise ValueError(f"Invalid light-power exclusion setting: {area_setting!r}")
 
 
+def _group_expansion_enabled(area_setting: bool | str, global_setting: Any) -> bool:
+    """Resolve the area's group-expansion choice against the global default."""
+    if area_setting is True or area_setting == GROUPS_EXPAND:
+        return True
+    if area_setting is False or area_setting == GROUPS_KEEP:
+        return False
+    if area_setting == GROUPS_FOLLOW_GLOBAL:
+        if isinstance(global_setting, bool):
+            return global_setting
+        raise ValueError(f"Invalid global group-expansion setting: {global_setting!r}")
+    raise ValueError(f"Invalid group-expansion setting: {area_setting!r}")
+
+
 def discover_area_sensors(
     hass: HomeAssistant,
     area_id: str | None,
     *,
-    expand_groups: bool = DEFAULT_EXPAND_GROUPS,
+    expand_groups: bool | str = DEFAULT_AREA_EXPAND_GROUPS,
     enabled_domains: Collection[str] | None = None,
     excluded_platforms: Collection[str] | None = None,
     exclude_light_power: bool | str = DEFAULT_AREA_LIGHT_POWER_SETTING,
@@ -492,8 +509,8 @@ def discover_area_sensors(
     """Return eligible discoverable entities grouped by sensor config key for an area.
 
     Disabled, diagnostic/config, integration-owned, outdoor weather, and
-    excluded-integration entities are skipped. When ``expand_groups`` is enabled,
-    group entities are replaced by their domain-filtered member entities. When
+    excluded-integration entities are skipped. Group expansion follows the
+    global setting unless explicitly overridden by the area. When
     ``enabled_domains`` is given, only matching sensor config keys are returned.
     The area's light-power setting follows or overrides the global setting.
     Device and integration exclusions combine across scopes, and device
@@ -504,6 +521,10 @@ def discover_area_sensors(
         return {}
 
     global_options = global_options or {}
+    expand_groups = _group_expansion_enabled(
+        expand_groups,
+        global_options.get(CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS),
+    )
     excluded_set = _normalize_excluded_platforms(excluded_platforms)
     excluded_set.update(
         _normalize_excluded_platforms(global_options.get(CONF_EXCLUDED_INTEGRATIONS))
@@ -611,13 +632,18 @@ def resolve_area_sensors(
 ) -> dict[str, Any]:
     """Merge discovered inputs into a copy of the area's manual selections.
 
-    Auto-discovery and group expansion default to enabled unless explicitly
-    set to ``False``. Area-specific and global entity exclusions strip matching
-    entities and matching device entities are stripped from every sensor
-    list, including saved selections and expanded group members.
+    Auto-discovery defaults to enabled. Group expansion follows the global
+    setting unless explicitly overridden by the area. Area-specific and global
+    entity exclusions strip matching entities and matching device entities are
+    stripped from every sensor list, including saved selections and expanded
+    group members.
     """
     resolved = dict(data)
-    expand_groups = data.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS)
+    global_options = global_options or {}
+    expand_groups = _group_expansion_enabled(
+        data.get(CONF_EXPAND_GROUPS, DEFAULT_AREA_EXPAND_GROUPS),
+        global_options.get(CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS),
+    )
     if expand_groups:
         for key in ALL_AREA_SENSOR_KEYS:
             existing = resolved.get(key)
@@ -635,7 +661,6 @@ def resolve_area_sensors(
                         expanded.append(entity_id)
                 resolved[key] = list(dict.fromkeys(expanded))
 
-    global_options = global_options or {}
     tracked_auto: dict[str, list[str]] = {}
     raw_tracked_auto = data.get(CONF_AUTO_ADDED_SENSORS)
     if isinstance(raw_tracked_auto, dict):
@@ -770,7 +795,7 @@ def build_suggested_area_config(
         CONF_PURPOSE: infer_purpose_from_name(area_name),
         CONF_AUTO_DISCOVER_SENSORS: DEFAULT_AUTO_DISCOVER_SENSORS,
         CONF_AUTO_DISCOVER_DOMAINS: list(DISCOVERABLE_SENSOR_KEYS),
-        CONF_EXPAND_GROUPS: DEFAULT_EXPAND_GROUPS,
+        CONF_EXPAND_GROUPS: DEFAULT_AREA_EXPAND_GROUPS,
         CONF_EXCLUDE_LIGHT_POWER: DEFAULT_AREA_LIGHT_POWER_SETTING,
         CONF_DECAY_HALF_LIFE: DEFAULT_DECAY_HALF_LIFE,
     }

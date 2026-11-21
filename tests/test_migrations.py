@@ -13,6 +13,7 @@ from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
     CONF_AREAS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXPAND_GROUPS,
     CONF_MOTION_SENSORS,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
@@ -24,6 +25,8 @@ from custom_components.area_occupancy.const import (
     CONF_VERSION,
     CONF_VERSION_MINOR,
     DOMAIN,
+    GROUPS_EXPAND,
+    GROUPS_KEEP,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
     SUBENTRY_TYPE_AREA,
@@ -1675,7 +1678,7 @@ class TestMigrateAreasToSubentries:
 
 
 class TestMigrateMotionTimeoutDefault:
-    """v19 -> v20 -> v21: migrate motion and light-power area defaults.
+    """Migrate motion, light-power, and group-expansion area settings.
 
     The setting never reached learning before, so a stored 300 was the old
     default, not a tuned value; any other value is left alone.
@@ -1708,7 +1711,7 @@ class TestMigrateMotionTimeoutDefault:
 
         assert await async_migrate_entry(hass, entry)
 
-        assert entry.version == 21
+        assert entry.version == CONF_VERSION
         timeouts = {
             subentry.title: subentry.data.get(CONF_MOTION_TIMEOUT)
             for subentry in entry.subentries.values()
@@ -1749,9 +1752,49 @@ class TestMigrateMotionTimeoutDefault:
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_AREA
         }
-        assert entry.version == 21
+        assert entry.version == CONF_VERSION
         assert migrated_settings == {
             "Living Room": LIGHT_POWER_EXCLUDE,
             "Kitchen": LIGHT_POWER_FOLLOW_GLOBAL,
             "Testing": LIGHT_POWER_EXCLUDE,
+        }
+
+    async def test_migrates_area_group_expansion_choices(
+        self, hass: HomeAssistant, setup_area_registry: dict[str, str]
+    ) -> None:
+        """Old booleans retain their group-expansion behavior."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title="Area Occupancy Detection",
+            version=18,
+            data={
+                CONF_AREAS: [
+                    {
+                        CONF_AREA_ID: setup_area_registry["Living Room"],
+                        CONF_EXPAND_GROUPS: True,
+                    },
+                    {
+                        CONF_AREA_ID: setup_area_registry["Kitchen"],
+                        CONF_EXPAND_GROUPS: False,
+                    },
+                    {CONF_AREA_ID: setup_area_registry["Testing"]},
+                ]
+            },
+        )
+        entry.add_to_hass(hass)
+        _migrate_areas_to_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=19)
+
+        assert await async_migrate_entry(hass, entry)
+
+        migrated_settings = {
+            subentry.title: subentry.data[CONF_EXPAND_GROUPS]
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_AREA
+        }
+        assert entry.version == CONF_VERSION
+        assert migrated_settings == {
+            "Living Room": GROUPS_EXPAND,
+            "Kitchen": GROUPS_KEEP,
+            "Testing": GROUPS_EXPAND,
         }

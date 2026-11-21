@@ -175,6 +175,7 @@ from .const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_APPLIANCE_ACTIVE_STATES,
+    DEFAULT_AREA_EXPAND_GROUPS,
     DEFAULT_AREA_LIGHT_POWER_SETTING,
     DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_COVER_ACTIVE_STATES,
@@ -185,8 +186,8 @@ from .const import (
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_FROM_ALL_AREAS,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
-    DEFAULT_EXPAND_GROUPS,
     DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+    DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_HEALTH_ENABLED,
     DEFAULT_MEDIA_ACTIVE_STATES,
     DEFAULT_MIN_PRIOR_OVERRIDE,
@@ -218,6 +219,9 @@ from .const import (
     DEFAULT_WINDOW_ACTIVE_STATE,
     DOMAIN,
     DURATION_FIELDS,
+    GROUPS_EXPAND,
+    GROUPS_FOLLOW_GLOBAL,
+    GROUPS_KEEP,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
     LIGHT_POWER_INCLUDE,
@@ -1368,12 +1372,29 @@ def _create_basics_step_schema(
         ),
         {"collapsed": True},
     )
-    fields[
-        vol.Optional(
-            CONF_EXPAND_GROUPS,
-            default=current.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+    group_expansion = current.get(CONF_EXPAND_GROUPS, DEFAULT_AREA_EXPAND_GROUPS)
+    if group_expansion is True:
+        group_expansion = GROUPS_EXPAND
+    elif group_expansion is False:
+        group_expansion = GROUPS_KEEP
+    if not isinstance(group_expansion, str) or group_expansion not in {
+        GROUPS_FOLLOW_GLOBAL,
+        GROUPS_EXPAND,
+        GROUPS_KEEP,
+    }:
+        group_expansion = DEFAULT_AREA_EXPAND_GROUPS
+    fields[vol.Optional(CONF_EXPAND_GROUPS, default=group_expansion)] = SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                SelectOptionDict(value=GROUPS_FOLLOW_GLOBAL, label="Follow Global"),
+                SelectOptionDict(
+                    value=GROUPS_EXPAND, label="Expand Groups Into Members"
+                ),
+                SelectOptionDict(value=GROUPS_KEEP, label="Keep Group Entities"),
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
         )
-    ] = BooleanSelector()
+    )
     light_power_setting = current.get(
         CONF_EXCLUDE_LIGHT_POWER, DEFAULT_AREA_LIGHT_POWER_SETTING
     )
@@ -1567,9 +1588,7 @@ def _create_sensors_step_schema(
                     f"{AUTO_ADDED_FIELD_PREFIX}{group}",
                     default=group_ids,
                 )
-            ] = EntitySelector(
-                EntitySelectorConfig(multiple=True, read_only=True)
-            )
+            ] = EntitySelector(EntitySelectorConfig(multiple=True, read_only=True))
         explicit_fields.update(builders[group]().schema)
     return {
         vol.Required(EXPLICIT_SECTION): section(
@@ -1877,7 +1896,7 @@ def _sync_discovered_and_excluded(
             discovered = discover_area_sensors(
                 hass,
                 draft[CONF_AREA_ID],
-                expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_EXPAND_GROUPS),
+                expand_groups=draft.get(CONF_EXPAND_GROUPS, DEFAULT_AREA_EXPAND_GROUPS),
                 enabled_domains=enabled_domains,
                 excluded_platforms=draft.get(CONF_EXCLUDED_INTEGRATIONS),
                 exclude_light_power=draft.get(
@@ -2294,6 +2313,10 @@ def _create_global_settings_schema(
                 ),
                 vol.Coerce(int),
             ),
+            vol.Required(
+                CONF_EXPAND_GROUPS,
+                default=defaults.get(CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS),
+            ): BooleanSelector(),
             # The current value is only suggested, not a default: a default
             # would refill the field whenever the user clears it.
             vol.Optional(
@@ -2885,9 +2908,7 @@ class BaseOccupancyFlow:
             CONF_MOTION_PROB_GIVEN_FALSE,
         }
         resolved_draft = self._resolve_area_sensors(self._area_config_draft)
-        auto_added_ids = _auto_added_sensor_ids(
-            resolved_draft, (CONF_MOTION_SENSORS,)
-        )
+        auto_added_ids = _auto_added_sensor_ids(resolved_draft, (CONF_MOTION_SENSORS,))
         schema_dict = _create_motion_step_schema(
             self.hass, auto_added_entities=auto_added_ids
         )

@@ -21,14 +21,19 @@ from .const import (
     CONF_AREA_ID,
     CONF_AREAS,
     CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXPAND_GROUPS,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
     CONF_PERSON_SLEEP_SENSOR,
     CONF_PERSON_SLEEP_SENSORS,
     CONF_VERSION,
     DEFAULT_EXCLUDE_LIGHT_POWER,
+    DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_MOTION_TIMEOUT,
     DOMAIN,
+    GROUPS_EXPAND,
+    GROUPS_FOLLOW_GLOBAL,
+    GROUPS_KEEP,
     LEGACY_DEFAULT_MOTION_TIMEOUT,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
@@ -688,6 +693,43 @@ def _migrate_area_light_power_setting(
             )
 
 
+def _migrate_area_group_expansion_setting(
+    hass: HomeAssistant, config_entry: ConfigEntry
+) -> None:
+    """Replace the per-area group-expansion boolean with an explicit choice."""
+    for subentry in list(config_entry.subentries.values()):
+        if subentry.subentry_type != SUBENTRY_TYPE_AREA:
+            continue
+
+        data = dict(subentry.data)
+        old_setting = data.get(CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS)
+        if old_setting is True:
+            setting = GROUPS_EXPAND
+        elif old_setting is False:
+            setting = GROUPS_KEEP
+        elif isinstance(old_setting, str) and old_setting in {
+            GROUPS_FOLLOW_GLOBAL,
+            GROUPS_EXPAND,
+            GROUPS_KEEP,
+        }:
+            continue
+        else:
+            _LOGGER.warning(
+                "Skipping invalid group-expansion setting for area %s: %r",
+                subentry.title,
+                old_setting,
+            )
+            continue
+
+        if data.get(CONF_EXPAND_GROUPS) != setting:
+            data[CONF_EXPAND_GROUPS] = setting
+            hass.config_entries.async_update_subentry(
+                config_entry,
+                subentry,
+                data=data,
+            )
+
+
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:  # noqa: C901
     """Migrate old entry to the new version.
 
@@ -791,6 +833,15 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             hass.config_entries.async_update_entry(config_entry, version=21)
             _LOGGER.debug(
                 "Migrated entry %s from v20 to v21 (area light-power setting)",
+                config_entry.entry_id,
+            )
+
+        # v21 -> v22: per-area group expansion can follow global or override it.
+        if config_entry.version == 21:
+            _migrate_area_group_expansion_setting(hass, config_entry)
+            hass.config_entries.async_update_entry(config_entry, version=22)
+            _LOGGER.debug(
+                "Migrated entry %s from v21 to v22 (area group expansion)",
                 config_entry.entry_id,
             )
 

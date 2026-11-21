@@ -78,6 +78,7 @@ from custom_components.area_occupancy.const import (
     CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_SENSORS,
+    CONF_EXPAND_GROUPS,
     CONF_ILLUMINANCE_SENSORS,
     CONF_LOCK_ACTIVE_STATE,
     CONF_LOCK_SENSORS,
@@ -105,8 +106,12 @@ from custom_components.area_occupancy.const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_AREA_LIGHT_POWER_SETTING,
+    DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_PURPOSE,
     DOMAIN,
+    GROUPS_EXPAND,
+    GROUPS_FOLLOW_GLOBAL,
+    GROUPS_KEEP,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
     LIGHT_POWER_INCLUDE,
@@ -1595,6 +1600,16 @@ class TestGlobalExclusions:
         }
 
         assert global_fields == area_fields == exclusions
+
+
+class TestGlobalGroupExpansion:
+    """Group expansion can be configured globally."""
+
+    def test_global_group_expansion_is_enabled_by_default(self) -> None:
+        schema = _create_global_settings_schema({})
+        marker = next(key for key in schema.schema if str(key) == CONF_EXPAND_GROUPS)
+
+        assert marker.default() is DEFAULT_GLOBAL_EXPAND_GROUPS
 
 
 class TestAreaOccupancyOptionsFlow:
@@ -4007,6 +4022,13 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
 
     basics_form = await flow.async_step_area_basics()
     schema = basics_form["data_schema"].schema
+    expand_groups_marker = next(key for key in schema if str(key) == CONF_EXPAND_GROUPS)
+    assert expand_groups_marker.default() == GROUPS_FOLLOW_GLOBAL
+    assert {option["value"] for option in expand_groups_marker.config["options"]} == {
+        GROUPS_FOLLOW_GLOBAL,
+        GROUPS_EXPAND,
+        GROUPS_KEEP,
+    }
     exclude_light_marker = next(
         key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
     )

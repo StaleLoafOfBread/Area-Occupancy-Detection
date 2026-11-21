@@ -24,6 +24,9 @@ from custom_components.area_occupancy.const import (
     CONF_PURPOSE,
     CONF_TEMPERATURE_SENSORS,
     DEFAULT_PURPOSE,
+    GROUPS_EXPAND,
+    GROUPS_FOLLOW_GLOBAL,
+    GROUPS_KEEP,
     LIGHT_POWER_EXCLUDE,
     LIGHT_POWER_FOLLOW_GLOBAL,
     LIGHT_POWER_INCLUDE,
@@ -975,6 +978,54 @@ def test_expand_groups_disabled_uses_group_entity() -> None:
         )
 
     assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.kitchen_motion_group"]
+
+
+@pytest.mark.parametrize(
+    ("area_setting", "global_setting", "expected_entity"),
+    [
+        (GROUPS_FOLLOW_GLOBAL, True, "binary_sensor.pir_1"),
+        (GROUPS_FOLLOW_GLOBAL, False, "binary_sensor.kitchen_motion_group"),
+        (GROUPS_EXPAND, False, "binary_sensor.pir_1"),
+        (GROUPS_KEEP, True, "binary_sensor.kitchen_motion_group"),
+    ],
+)
+def test_group_expansion_area_override(
+    area_setting: str, global_setting: bool, expected_entity: str
+) -> None:
+    """Area group-expansion choices follow or override the global setting."""
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            _reg_entry(
+                "binary_sensor.kitchen_motion_group",
+                area_id="kitchen",
+                device_class="motion",
+            ),
+            _reg_entry("binary_sensor.pir_1", device_class="motion"),
+        ],
+        states={
+            "binary_sensor.kitchen_motion_group": {
+                "device_class": "motion",
+                "entity_id": ["binary_sensor.pir_1"],
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "kitchen", CONF_EXPAND_GROUPS: area_setting},
+            global_options={CONF_EXPAND_GROUPS: global_setting},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [expected_entity]
 
 
 def test_expand_groups_skips_missing_entities() -> None:
