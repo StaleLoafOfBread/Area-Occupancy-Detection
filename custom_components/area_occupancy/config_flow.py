@@ -321,50 +321,86 @@ AUTO_ADDED_SECTION: Final = "auto_added"
 EXPLICIT_SECTION: Final = "explicit"
 AUTO_ADDED_ENTITIES_FIELD: Final = "auto_added_entities"
 AUTO_ADDED_FIELD_PREFIX: Final = "auto_added_"
-_AUTO_DISCOVER_DOMAIN_LABELS: Final[dict[str, str]] = {
-    CONF_MOTION_SENSORS: "Motion & Presence",
-    CONF_DOOR_SENSORS: "Doors",
-    CONF_WINDOW_SENSORS: "Windows",
-    CONF_LOCK_SENSORS: "Locks",
-    CONF_COVER_SENSORS: "Covers",
-    CONF_MEDIA_DEVICES: "Media Players",
-    CONF_POWER_SENSORS: "Power & Current",
-    CONF_TEMPERATURE_SENSORS: "Temperature",
-    CONF_HUMIDITY_SENSORS: "Humidity & Moisture",
-    CONF_ILLUMINANCE_SENSORS: "Illuminance",
-    CONF_CO2_SENSORS: "CO2",
-    CONF_CO_SENSORS: "CO",
-    CONF_SOUND_PRESSURE_SENSORS: "Sound Pressure",
-    CONF_PRESSURE_SENSORS: "Pressure",
-    CONF_AIR_QUALITY_SENSORS: "Air Quality",
-    CONF_VOC_SENSORS: "VOC",
-    CONF_PM25_SENSORS: "PM2.5",
-    CONF_PM10_SENSORS: "PM10",
+_SENSOR_KEY_TYPES: Final[dict[str, str]] = {
+    CONF_MOTION_SENSORS: "motion",
+    CONF_DOOR_SENSORS: "door",
+    CONF_WINDOW_SENSORS: "window",
+    CONF_LOCK_SENSORS: "lock",
+    CONF_COVER_SENSORS: "cover",
+    CONF_MEDIA_DEVICES: "media",
+    CONF_APPLIANCES: "appliance",
+    CONF_POWER_SENSORS: "power",
+    CONF_WIFI_CLIENTS_SENSORS: "wifi_clients",
+    CONF_CUSTOM_BINARY_SENSORS: "custom_binary",
+    CONF_CUSTOM_NUMERIC_SENSORS: "custom_numeric",
+    CONF_TEMPERATURE_SENSORS: "temperature",
+    CONF_HUMIDITY_SENSORS: "humidity",
+    CONF_ILLUMINANCE_SENSORS: "illuminance",
+    CONF_CO2_SENSORS: "co2",
+    CONF_CO_SENSORS: "co",
+    CONF_SOUND_PRESSURE_SENSORS: "sound_pressure",
+    CONF_PRESSURE_SENSORS: "pressure",
+    CONF_AIR_QUALITY_SENSORS: "air_quality",
+    CONF_VOC_SENSORS: "voc",
+    CONF_PM25_SENSORS: "pm25",
+    CONF_PM10_SENSORS: "pm10",
+}
+_SENSOR_TYPE_KEYS: Final[dict[str, str]] = {
+    sensor_type: key for key, sensor_type in _SENSOR_KEY_TYPES.items()
 }
 
+# Keep the sensor type ordering aligned with the manual wizard's groups and
+# field order. Motion is configured in its own wizard step.
+_SENSOR_TYPE_ORDER: Final[tuple[str, ...]] = (
+    "motion",
+    *(
+        _SENSOR_KEY_TYPES[key]
+        for group in SENSOR_GROUPS
+        for key in SENSOR_GROUP_KEYS[group]
+        if key in _SENSOR_KEY_TYPES
+    ),
+)
 
-def _get_auto_discover_domain_options() -> list[SelectOptionDict]:
+
+def _get_auto_discover_sensor_type_options() -> list[str]:
     """Return ordered checkbox options for each auto-discoverable sensor type."""
-    options = [
-        SelectOptionDict(value=key, label=label)
-        for key, label in _AUTO_DISCOVER_DOMAIN_LABELS.items()
+    ordered_keys = [CONF_MOTION_SENSORS]
+    ordered_keys.extend(
+        key
+        for group in SENSOR_GROUPS
+        for key in SENSOR_GROUP_KEYS[group]
         if key in DISCOVERABLE_SENSOR_KEYS
-    ]
-    options.extend(
-        SelectOptionDict(value=key, label=key)
-        for key in DISCOVERABLE_SENSOR_KEYS
-        if key not in _AUTO_DISCOVER_DOMAIN_LABELS
     )
-    return options
+    return [_SENSOR_KEY_TYPES[key] for key in ordered_keys]
 
 
-def _get_ordered_auto_discover_domains(data: dict[str, Any]) -> list[str]:
-    """Return enabled discovery domains ordered to match the checklist options."""
+def _get_excluded_sensor_type_options() -> list[str]:
+    """Return ordered sensor type choices grouped like manual configuration."""
+    sensor_types = get_sensor_type_mapping()
+    return [
+        sensor_type
+        for sensor_type in _SENSOR_TYPE_ORDER
+        if sensor_type in sensor_types and sensor_type != "sleep"
+    ]
+
+
+def _get_ordered_auto_discover_types(data: dict[str, Any]) -> list[str]:
+    """Return enabled sensor types in the manual wizard's display order."""
     enabled = get_enabled_discovery_domains(data)
     return [
-        opt["value"]
-        for opt in _get_auto_discover_domain_options()
-        if opt["value"] in enabled
+        sensor_type
+        for sensor_type in _get_auto_discover_sensor_type_options()
+        if _SENSOR_TYPE_KEYS[sensor_type] in enabled
+    ]
+
+
+def _sensor_types_to_discovery_domains(sensor_types: list[str]) -> list[str]:
+    """Convert selector type values to the persisted discovery domain keys."""
+    return [
+        _SENSOR_TYPE_KEYS[sensor_type]
+        for sensor_type in sensor_types
+        if sensor_type in _SENSOR_TYPE_KEYS
+        and _SENSOR_TYPE_KEYS[sensor_type] in DISCOVERABLE_SENSOR_KEYS
     ]
 
 
@@ -1366,12 +1402,13 @@ def _create_basics_step_schema(
             {
                 vol.Optional(
                     CONF_AUTO_DISCOVER_DOMAINS,
-                    default=_get_ordered_auto_discover_domains(current),
+                    default=_get_ordered_auto_discover_types(current),
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=_get_auto_discover_domain_options(),
+                        options=_get_auto_discover_sensor_type_options(),
                         multiple=True,
                         mode=SelectSelectorMode.LIST,
+                        translation_key="sensor_types",
                     )
                 )
             }
@@ -2361,14 +2398,7 @@ def _create_global_exclusions_schema(
     device_key, device_selector = next(iter(all_fields.items()))
     entity_key, entity_selector = list(all_fields.items())[1]
     integration_key, integration_selector = list(all_fields.items())[2]
-    sensor_type_options = [
-        SelectOptionDict(
-            value=input_type.value,
-            label=input_type.value.replace("_", " ").title(),
-        )
-        for input_type in get_sensor_type_mapping().values()
-        if input_type.value != "sleep"
-    ]
+    sensor_type_options = _get_excluded_sensor_type_options()
     fields: dict[vol.Marker, Any] = {
         vol.Optional("sensor_types"): section(
             vol.Schema(
@@ -2381,6 +2411,7 @@ def _create_global_exclusions_schema(
                             options=sensor_type_options,
                             multiple=True,
                             mode=SelectSelectorMode.LIST,
+                            translation_key="sensor_types",
                         )
                     )
                 }
@@ -2831,6 +2862,12 @@ class BaseOccupancyFlow:
 
         if user_input is not None:
             flattened_input = flatten_sectioned_input(user_input)
+            if CONF_AUTO_DISCOVER_DOMAINS in flattened_input:
+                flattened_input[CONF_AUTO_DISCOVER_DOMAINS] = (
+                    _sensor_types_to_discovery_domains(
+                        flattened_input[CONF_AUTO_DISCOVER_DOMAINS] or []
+                    )
+                )
             # Read-only area selector doesn't submit a value when editing,
             # so fill it in from the draft
             if self._area_being_edited and CONF_AREA_ID not in flattened_input:
@@ -2901,7 +2938,7 @@ class BaseOccupancyFlow:
             )
             if CONF_AUTO_DISCOVER_DOMAINS in self._area_config_draft:
                 suggested[SECTION_AUTO_DISCOVERY_TYPES] = {
-                    CONF_AUTO_DISCOVER_DOMAINS: _get_ordered_auto_discover_domains(
+                    CONF_AUTO_DISCOVER_DOMAINS: _get_ordered_auto_discover_types(
                         self._area_config_draft
                     )
                 }

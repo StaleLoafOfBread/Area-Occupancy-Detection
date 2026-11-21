@@ -1601,7 +1601,6 @@ class TestGlobalExclusions:
 
         assert global_fields == area_fields == exclusions
 
-
 class TestGlobalGroupExpansion:
     """Group expansion can be configured globally."""
 

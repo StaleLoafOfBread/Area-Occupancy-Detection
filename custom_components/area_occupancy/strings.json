@@ -1129,7 +1129,7 @@
                             "excluded_device_matches": "Devices excluded by manufacturer or model"
                         },
                         "data_description": {
-                            "exclude_light_power": "Sets the default for areas set to Follow Global. An area can choose Include or Exclude for automatic discovery in that area.",
+                            "exclude_light_power": "Do not auto add power readings from light bulbs. Occupancy sensors often feed into automated lights, thus causing a feedback loop if not excluded. Sets the default for areas set to `Follow Global`. ",
                             "excluded_device_matches": "Match manufacturer or model text across every area. Matching entities are ignored even if previously selected; area settings cannot override this."
                         }
                     },
@@ -1681,6 +1681,34 @@
                     "name": "Closed door means still occupied",
                     "description": "Whether the area stays occupied while its doors stay closed after motion."
                 }
+            }
+        }
+    },
+    "selector": {
+        "sensor_types": {
+            "options": {
+                "motion": "Motion & Presence",
+                "door": "Door",
+                "lock": "Lock",
+                "window": "Window",
+                "cover": "Cover",
+                "media": "Media",
+                "appliance": "Appliance",
+                "illuminance": "Environmental · Illuminance",
+                "humidity": "Environmental · Humidity",
+                "temperature": "Environmental · Temperature",
+                "co2": "Environmental · CO2",
+                "co": "Environmental · CO",
+                "sound_pressure": "Environmental · Sound Pressure",
+                "pressure": "Environmental · Pressure",
+                "air_quality": "Environmental · Air Quality",
+                "voc": "Environmental · VOC",
+                "pm25": "Environmental · PM2.5",
+                "pm10": "Environmental · PM10",
+                "power": "Power",
+                "wifi_clients": "Wi-Fi Clients",
+                "custom_binary": "Custom Binary",
+                "custom_numeric": "Custom Numeric"
             }
         }
     }
