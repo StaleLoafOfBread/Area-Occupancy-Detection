@@ -64,6 +64,7 @@ from .const import (
     DEFAULT_DECAY_HALF_LIFE,
     DEFAULT_EXCLUDE_LIGHT_POWER,
     DEFAULT_EXCLUDED_DEVICE_MATCHES,
+    DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
     DEFAULT_GLOBAL_EXPAND_GROUPS,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -575,7 +576,10 @@ def discover_area_sensors(
         if isinstance(entity_id, str)
     }
     exclude_light_power = _light_power_exclusion_enabled(
-        exclude_light_power, global_options.get(CONF_EXCLUDE_LIGHT_POWER, False)
+        exclude_light_power,
+        global_options.get(
+            CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+        ),
     )
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
