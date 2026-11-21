@@ -1321,6 +1321,7 @@ def _create_basics_step_schema(
     adjacent_options: list[SelectOptionDict] | None = None,
     current: dict[str, Any] | None = None,
     hass: HomeAssistant | None = None,
+    global_options: dict[str, Any] | None = None,
 ) -> dict[vol.Marker, Any]:
     """Create schema for wizard step 1: area selection and purpose.
 
@@ -1337,8 +1338,11 @@ def _create_basics_step_schema(
             and cleared its adjacency.
         hass: Optional Home Assistant instance used to pre-populate available
             integrations for exclusion.
+        global_options: Integration-wide discovery settings used to show the
+            effective value beside each Follow Global choice.
     """
     current = current or {}
+    global_options = global_options or {}
     fields: dict[vol.Marker, Any] = {}
     if not is_editing:
         fields[vol.Required(CONF_AREA_ID)] = AreaSelector()
@@ -1385,10 +1389,17 @@ def _create_basics_step_schema(
         GROUPS_KEEP,
     }:
         group_expansion = DEFAULT_AREA_EXPAND_GROUPS
+    global_group_expansion = global_options.get(
+        CONF_EXPAND_GROUPS, DEFAULT_GLOBAL_EXPAND_GROUPS
+    )
+    global_group_label = "On" if global_group_expansion else "Off"
     fields[vol.Optional(CONF_EXPAND_GROUPS, default=group_expansion)] = SelectSelector(
         SelectSelectorConfig(
             options=[
-                SelectOptionDict(value=GROUPS_FOLLOW_GLOBAL, label="Follow Global"),
+                SelectOptionDict(
+                    value=GROUPS_FOLLOW_GLOBAL,
+                    label=f"Follow Global ({global_group_label})",
+                ),
                 SelectOptionDict(
                     value=GROUPS_EXPAND, label="Expand Groups Into Members"
                 ),
@@ -1410,6 +1421,10 @@ def _create_basics_step_schema(
         LIGHT_POWER_INCLUDE,
     }:
         light_power_setting = DEFAULT_AREA_LIGHT_POWER_SETTING
+    global_light_power_exclusion = global_options.get(
+        CONF_EXCLUDE_LIGHT_POWER, DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER
+    )
+    global_light_power_label = "On" if global_light_power_exclusion else "Off"
     area_exclusions = {
         vol.Optional(
             CONF_EXCLUDE_LIGHT_POWER, default=light_power_setting
@@ -1417,7 +1432,8 @@ def _create_basics_step_schema(
             SelectSelectorConfig(
                 options=[
                     SelectOptionDict(
-                        value=LIGHT_POWER_FOLLOW_GLOBAL, label="Follow Global"
+                        value=LIGHT_POWER_FOLLOW_GLOBAL,
+                        label=f"Follow Global ({global_light_power_label})",
                     ),
                     SelectOptionDict(
                         value=LIGHT_POWER_EXCLUDE, label="Exclude Light Power Sensors"
@@ -2861,6 +2877,7 @@ class BaseOccupancyFlow:
             adjacent_options=adjacent_options,
             current=self._area_config_draft if self._area_being_edited else None,
             hass=self.hass,
+            global_options=self._get_global_discovery_settings(),
         )
         base_schema = vol.Schema(schema_dict)
 
@@ -3695,6 +3712,7 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
                 adjacent_options=adjacent_options,
                 current=suggested_config,
                 hass=self.hass,
+                global_options=self._get_global_discovery_settings(),
             )
         )
         data_schema = (
