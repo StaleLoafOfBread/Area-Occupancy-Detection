@@ -3474,11 +3474,8 @@ async def test_sensors_step_separates_readonly_discovery_from_explicit_selection
     ] == ["sensor.temp_auto", "sensor.temp_ignore"]
 
 
-def test_sensor_sections_format_automatic_and_explicit_entities(
-    config_flow_flow: AreaOccupancyConfigFlow,
-) -> None:
+def test_sensor_sections_format_automatic_and_explicit_entities() -> None:
     """Automatic entities are listed read-only and excluded from explicit selectors."""
-    flow = config_flow_flow
     resolved = {
         CONF_MOTION_SENSORS: [
             "binary_sensor.motion_auto",
