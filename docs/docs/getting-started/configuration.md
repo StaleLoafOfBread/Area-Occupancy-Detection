@@ -22,7 +22,7 @@ Area configuration uses a multi-step wizard that walks you through setup one sec
 
 Select the Home Assistant area and its primary [Purpose](../features/purpose.md). The purpose sets a sensible default for the [decay](../features/decay.md) half-life used when probability decreases.
 
-**Automatically discover sensors** is enabled for new areas. It adds supported sensors using their Home Assistant device class and area assignment. An entity's area takes precedence over its device's area. Discovery refreshes at startup, when configuration is saved, and after entity or device registry changes.
+**Automatically discover sensors** is enabled by default for new areas. It adds supported sensors using their Home Assistant device class and area assignment. An entity's area takes precedence over its device's area. Discovery refreshes at startup, when configuration is saved, and after entity or device registry changes.
 
 Existing areas keep their manual selections and discovery stays off until you enable it in **Area Basics**. Turning discovery off removes automatic additions without changing your saved manual selections or learned history.
 
@@ -30,11 +30,11 @@ Use **Exclude from automatic discovery** to leave specific entities out. **Exclu
 
 For exclusions that should apply everywhere, open **Configure → Global Settings**. Global entity exclusions remove those entities from occupancy detection in every area; global **Excluded manufacturers** and **Excluded models** do the same for every entity on a matching device. Global integration exclusions apply to automatic discovery in every area, but do not prevent manual selection.
 
-Light-derived power sensors use a separate rule. The global toggle is on by default and is the default for areas set to **Follow Global**. An area can instead choose **Exclude Light Power Sensors** or **Include Light Power Sensors**, overriding the global toggle for that area's automatic discovery. This light-power choice does not remove manually selected sensors.
+Automatic discovery also includes four built-in sensor noise rules that can each be toggled globally or overridden per area (**Follow Global**, **Exclude**, or **Include**): light-derived power sensors (on by default), occupancy subzones on multi-zone presence devices (on by default), remote/child/calibration locks (on by default), and vehicle-detected sensors (off by default). These exclusions filter automatic discovery without removing manually selected sensors.
 
 Group expansion has its own global default in **Configure → Global Settings**. New areas follow that setting by default. In an area, choose **Follow Global**, **Expand Groups Into Members**, or **Keep Group Entities** to inherit or override the global setting. This applies to both manually selected and automatically discovered groups.
 
-Discovery supports motion/occupancy/presence, typed door and window contacts, media players, locks, covers, power, and supported environmental device classes. Disabled, hidden, diagnostic/configuration entities and this integration's own outputs are skipped. Generic opening contacts, switches/appliances, Wi-Fi counts, sleep sensors, and custom sensors still require manual selection because their role cannot be inferred reliably. At least one discovered or manually selected motion/presence sensor is required to save an area.
+Discovery supports motion/occupancy/presence, typed door and window contacts, media players, locks, covers, power, and supported environmental device classes. Disabled, diagnostic/configuration entities, and this integration's own outputs are skipped. Generic opening contacts, switches/appliances, Wi-Fi counts, sleep sensors, and custom sensors still require manual selection because their role cannot be inferred reliably. At least one discovered or manually selected motion/presence sensor is required to save an area.
 
 You can also select **Adjacent Areas** — other configured areas that physically connect to this one (a hallway and the bedroom it leads to, for example). The selection is symmetric: adding an area here also adds this one to its neighbour's list. Adjacency has no fixed strength setting; the integration learns how your household actually moves between the rooms and uses that to influence probability and decay. See [Adjacent Areas](../features/adjacent-areas.md) for details and what to expect during the learning period.
 

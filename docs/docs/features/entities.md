@@ -21,7 +21,7 @@ This integration creates several entities in Home Assistant to expose the calcul
     *   **Description:** Shows the current calculated probability that the area is occupied. This value incorporates sensor inputs, learned priors, weights, and decay (if active).
     *   **Device Class:** `power_factor` (used for % display)
     *   **State Class:** `measurement`
-    *   **Attributes:** Includes active entity IDs, the learned prior, and decaying entity details. Each decaying entity includes its current `decay_factor`. Live-only attributes (`decaying_half_lives`, `decaying_expires_at`, `decay_clear_at`, `adjacent_areas`, and `environmental_entities`) are exposed for the dashboard and excluded from Recorder history.
+    *   **Attributes:** Includes active entity IDs, the learned prior, and decaying entity details. Each decaying entity includes its current `decay_factor`. Live-only attributes (`decaying_expires_at`, `decay_clear_at`, `adjacent_areas`, and `environmental_entities`) are exposed for the dashboard and excluded from Recorder history.
 
 *   **`number.area_occupancy_threshold_<area_name>` (Occupancy Threshold)**
     *   **State:** Numeric value (configurable range, typically 1-99)

@@ -23,6 +23,7 @@ from custom_components.area_occupancy.config_helpers import (
     WEIGHT_MAX,
     apply_purpose_based_decay_default,
     duration_to_seconds,
+    get_purpose_decay_overrides,
     is_active_config_entry,
     normalize_exclusion_mode,
     normalize_group_expansion_mode,
@@ -511,16 +512,38 @@ class TestGlobalParsersAndModes:
             }
         ) == {"living": 180, "bathroom": 120}
 
+    def test_get_purpose_decay_overrides_filters_invalid_values(self) -> None:
+        coordinator = SimpleNamespace(
+            integration_config=SimpleNamespace(
+                purpose_decay_half_lives={
+                    "living": 180,
+                    "zero": 0,
+                    "negative": -10,
+                    "bool_true": True,
+                }
+            )
+        )
+        assert get_purpose_decay_overrides(coordinator) == {"living": 180}
+        assert get_purpose_decay_overrides(None) is None
+
     def test_normalize_and_resolve_exclusion_mode(self) -> None:
         assert (
             normalize_exclusion_mode(True, default=ExclusionMode.FOLLOW_GLOBAL)
+            == ExclusionMode.FOLLOW_GLOBAL
+        )
+        assert (
+            normalize_exclusion_mode(False, default=ExclusionMode.FOLLOW_GLOBAL)
+            == ExclusionMode.FOLLOW_GLOBAL
+        )
+        assert (
+            normalize_exclusion_mode(
+                ExclusionMode.EXCLUDE, default=ExclusionMode.FOLLOW_GLOBAL
+            )
             == ExclusionMode.EXCLUDE
         )
         assert (
             normalize_exclusion_mode(
-                False,
-                default=ExclusionMode.FOLLOW_GLOBAL,
-                legacy_false=ExclusionMode.INCLUDE,
+                ExclusionMode.INCLUDE.value, default=ExclusionMode.FOLLOW_GLOBAL
             )
             == ExclusionMode.INCLUDE
         )
@@ -528,8 +551,14 @@ class TestGlobalParsersAndModes:
             normalize_exclusion_mode("bogus", default=ExclusionMode.FOLLOW_GLOBAL)
             == ExclusionMode.FOLLOW_GLOBAL
         )
-        assert resolve_exclusion_enabled(True, False, setting_name="test") is True
-        assert resolve_exclusion_enabled(False, True, setting_name="test") is False
+        assert (
+            resolve_exclusion_enabled(ExclusionMode.EXCLUDE, False, setting_name="test")
+            is True
+        )
+        assert (
+            resolve_exclusion_enabled(ExclusionMode.INCLUDE, True, setting_name="test")
+            is False
+        )
         assert (
             resolve_exclusion_enabled(
                 ExclusionMode.FOLLOW_GLOBAL, True, setting_name="test"
@@ -542,19 +571,30 @@ class TestGlobalParsersAndModes:
             )
             is False
         )
+        with pytest.raises(ValueError, match="Invalid global test setting"):
+            resolve_exclusion_enabled(
+                ExclusionMode.FOLLOW_GLOBAL, "bad", setting_name="test"
+            )
 
     def test_normalize_and_resolve_group_expansion_mode(self) -> None:
         assert (
             normalize_group_expansion_mode(
                 True, default=GroupExpansionMode.FOLLOW_GLOBAL
             )
-            == GroupExpansionMode.EXPAND
+            == GroupExpansionMode.FOLLOW_GLOBAL
         )
         assert (
             normalize_group_expansion_mode(
                 False, default=GroupExpansionMode.FOLLOW_GLOBAL
             )
-            == GroupExpansionMode.KEEP
+            == GroupExpansionMode.FOLLOW_GLOBAL
+        )
+        assert (
+            normalize_group_expansion_mode(
+                GroupExpansionMode.EXPAND.value,
+                default=GroupExpansionMode.FOLLOW_GLOBAL,
+            )
+            == GroupExpansionMode.EXPAND
         )
         assert (
             normalize_group_expansion_mode(
@@ -562,8 +602,8 @@ class TestGlobalParsersAndModes:
             )
             == GroupExpansionMode.FOLLOW_GLOBAL
         )
-        assert resolve_group_expansion_enabled(True, False) is True
-        assert resolve_group_expansion_enabled(False, True) is False
+        assert resolve_group_expansion_enabled(GroupExpansionMode.EXPAND, False) is True
+        assert resolve_group_expansion_enabled(GroupExpansionMode.KEEP, True) is False
         assert (
             resolve_group_expansion_enabled(GroupExpansionMode.FOLLOW_GLOBAL, True)
             is True

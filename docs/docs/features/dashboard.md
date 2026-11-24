@@ -27,8 +27,9 @@ later, recreate the dashboard from the strategy to refresh its views.
 - Each configured area has a subview with occupancy controls, a **Sensors & Decay** list, recent history, and a weekly forecast.
 
 Area detail views use [Auto-Entities](https://github.com/thomasloven/lovelace-auto-entities)
-to discover the sensors assigned to each Home Assistant area. The Status view's
-live timers use [Button Card](https://github.com/custom-cards/button-card).
-Install those cards for the dynamic sensor lists and live timers. The
-integration's time-priors heatmap is bundled and loaded automatically.
-Standard Home Assistant cards provide the rest of the dashboard.
+to populate each room's active and decaying sensors from its **Evidence**
+sensor's `details` attribute. [Button Card](https://github.com/custom-cards/button-card)
+renders the floor, area, and sensor cards. Install those cards for the dynamic
+sensor lists and interactive cards. The integration's time-priors heatmap is
+bundled and loaded automatically. Standard Home Assistant cards provide the rest
+of the dashboard.

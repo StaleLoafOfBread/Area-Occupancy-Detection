@@ -119,6 +119,7 @@ from custom_components.area_occupancy.const import (
     DEFAULT_AREA_EXCLUSION_SETTING,
     DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_PURPOSE,
+    DISCOVERY_EXCLUSION_RULES,
     DOMAIN,
     SENSOR_KEY_TO_TYPE_SLUG,
     SUBENTRY_TYPE_AREA,
@@ -2696,7 +2697,11 @@ class TestSectionEditing:
             CONF_PURPOSE: "sleeping",
             CONF_ADJACENT_AREAS: ["kitchen"],
             CONF_AUTO_DISCOVER_SENSORS: True,
-            CONF_EXCLUDED_SENSORS: [],
+            CONF_EXPAND_GROUPS: GroupExpansionMode.FOLLOW_GLOBAL.value,
+            **{
+                rule.config_key: ExclusionMode.FOLLOW_GLOBAL.value
+                for rule in DISCOVERY_EXCLUSION_RULES
+            },
         }
 
     def test_basics_defaults_stay_generic_when_adding(self) -> None:
@@ -2705,7 +2710,11 @@ class TestSectionEditing:
         assert schema({}) == {
             CONF_PURPOSE: DEFAULT_PURPOSE,
             CONF_AUTO_DISCOVER_SENSORS: True,
-            CONF_EXCLUDED_SENSORS: [],
+            CONF_EXPAND_GROUPS: GroupExpansionMode.FOLLOW_GLOBAL.value,
+            **{
+                rule.config_key: ExclusionMode.FOLLOW_GLOBAL.value
+                for rule in DISCOVERY_EXCLUSION_RULES
+            },
         }
 
     async def test_edit_basics_spoke_changes_purpose_and_keeps_rest(
@@ -3466,7 +3475,7 @@ def test_sync_drops_explicit_device_matches_when_excluded() -> None:
             return_value={},
         ),
         patch(
-            "custom_components.area_occupancy.config_flow.excluded_device_entity_ids",
+            "custom_components.area_occupancy.config_flow.resolve_excluded_device_entity_ids",
             return_value={"binary_sensor.garage_motion"},
         ),
     ):
@@ -4125,20 +4134,20 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
     basics_form = await flow.async_step_area_basics()
     schema = basics_form["data_schema"].schema
     expand_groups_marker = next(key for key in schema if str(key) == CONF_EXPAND_GROUPS)
-    assert expand_groups_marker.default() == GroupExpansionMode.FOLLOW_GLOBAL
-    assert set(expand_groups_marker.config["options"]) == {
-        GroupExpansionMode.FOLLOW_GLOBAL,
-        GroupExpansionMode.EXPAND,
-        GroupExpansionMode.KEEP,
+    assert expand_groups_marker.default() == GroupExpansionMode.FOLLOW_GLOBAL.value
+    assert set(schema[expand_groups_marker].config["options"]) == {
+        GroupExpansionMode.FOLLOW_GLOBAL.value,
+        GroupExpansionMode.EXPAND.value,
+        GroupExpansionMode.KEEP.value,
     }
     exclude_light_marker = next(
         key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
     )
-    assert exclude_light_marker.default() == DEFAULT_AREA_EXCLUSION_SETTING
-    assert set(exclude_light_marker.config["options"]) == {
-        ExclusionMode.FOLLOW_GLOBAL,
-        ExclusionMode.EXCLUDE,
-        ExclusionMode.INCLUDE,
+    assert exclude_light_marker.default() == DEFAULT_AREA_EXCLUSION_SETTING.value
+    assert set(schema[exclude_light_marker].config["options"]) == {
+        ExclusionMode.FOLLOW_GLOBAL.value,
+        ExclusionMode.EXCLUDE.value,
+        ExclusionMode.INCLUDE.value,
     }
 
     exclusions_section_marker = next(
@@ -4166,22 +4175,17 @@ async def test_basics_step_exclude_light_power_and_source_domain_options(
     sensors_res = await flow.async_step_area_motion(
         {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
     )
-    auto_section = next(
-        value
-        for key, value in sensors_res["data_schema"].schema.items()
-        if str(key) == AUTO_ADDED_SECTION
-    )
-    auto_marker = next(
-        key
-        for key in auto_section.schema.schema
-        if str(key) == AUTO_ADDED_ENTITIES_FIELD
-    )
-    assert desk_power.entity_id in auto_marker.default()
     explicit_section = next(
         value
         for key, value in sensors_res["data_schema"].schema.items()
         if str(key) == EXPLICIT_SECTION
     )
+    auto_marker = next(
+        key
+        for key in explicit_section.schema.schema
+        if str(key) == f"{AUTO_ADDED_FIELD_PREFIX}power"
+    )
+    assert desk_power.entity_id in auto_marker.default()
     power_marker = next(
         key for key in explicit_section.schema.schema if str(key) == CONF_POWER_SENSORS
     )
@@ -4247,8 +4251,8 @@ async def test_area_basics_nests_area_exclusions_in_suggested_values(
     flow._area_config_draft = {
         CONF_AREA_ID: office.id,
         CONF_PURPOSE: "work",
-        CONF_EXPAND_GROUPS: False,
-        CONF_EXCLUDE_LIGHT_POWER: False,
+        CONF_EXPAND_GROUPS: GroupExpansionMode.KEEP,
+        CONF_EXCLUDE_LIGHT_POWER: ExclusionMode.INCLUDE,
         CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
         CONF_EXCLUDED_MODELS: ["Model1"],
         CONF_EXCLUDED_INTEGRATIONS: ["esphome"],

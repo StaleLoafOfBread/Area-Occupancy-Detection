@@ -137,7 +137,8 @@ def test_dashboard_strategy_sensor_cards_show_decay_countdown() -> None:
     source = strategy.read_text(encoding="utf-8")
     assert "decaying_expires_at" in source
     assert "startCountdownTo(expiresAtMs)" in source
-    assert "startCountdownFrom(seconds," in source
+    assert "startCountdownFrom" not in source
+    assert "decaying_half_lives" not in source
 
 
 def test_dashboard_strategy_replaces_history_with_conditional_info_view() -> None:

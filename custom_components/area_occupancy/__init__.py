@@ -267,11 +267,12 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Serve the bundled frontend tools and load them on every dashboard.
 
     Runs from the component-level ``async_setup`` so it happens once per Home
-    Assistant start, not once per config entry. The card is served with long
+    Assistant start, not once per config entry. The assets are served with long
     cache headers under a URL that carries the integration version, so each
-    release is a new cache key and browsers always load the card that shipped
-    with the installed integration. A missing card file is logged and skipped:
-    the card is a companion, it must never stop the integration from loading.
+    release is a new cache key and browsers always load the files that shipped
+    with the installed integration. A missing asset file is logged and skipped:
+    frontend assets are companions and must never stop the integration from
+    loading.
     """
     if hass.data.get(FRONTEND_REGISTERED_KEY):
         return

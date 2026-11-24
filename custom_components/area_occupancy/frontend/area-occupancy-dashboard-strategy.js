@@ -10,6 +10,7 @@
   const STRATEGY_TAG = `ll-strategy-dashboard-${STRATEGY_TYPE}`;
   const PROBABILITY_CARD_TAG = "area-occupancy-probability-card";
   const HA_ROOT_TAG = "home-assistant";
+  const CONFIG_PATH_SEGMENT = "config";
   const ENTITY_PLACEHOLDER = "__ENTITY__";
   const ENTITY_ID_SEP = ".";
   const COUNTDOWN_TEXT_CLASS = "cd-txt";
@@ -50,7 +51,6 @@
     ACTIVE_ENTITIES: "active_entities",
     ADJACENT_AREAS: "adjacent_areas",
     DECAYING_ENTITIES: "decaying_entities",
-    DECAYING_HALF_LIVES: "decaying_half_lives",
     DECAYING_EXPIRES_AT: "decaying_expires_at",
     DECAY_CLEAR_AT: "decay_clear_at",
     DETAILS: "details",
@@ -62,7 +62,6 @@
   const DECAY_ITEM_KEY = Object.freeze({
     ENTITY_ID: "entity_id",
     DECAY_FACTOR: "decay_factor",
-    HALF_LIFE: "half_life",
   });
 
   const AREA_MODE = Object.freeze({
@@ -98,7 +97,6 @@
   const AUTO_ENTITIES_CONFIG = Object.freeze({
     VISIBILITY_CONDITION: "screen",
     CARD_PARAM: "cards",
-    SORT_METHOD: "name",
   });
 
   const RANGE_ID = Object.freeze({
@@ -305,6 +303,16 @@
     }),
   });
 
+  const RGB = Object.freeze({
+    OCCUPIED: "76,175,80",
+    DECAYING: "255,152,0",
+    PRIOR: "255,193,7",
+    PROBABILITY: "66,165,245",
+    NEUTRAL: "128,128,128",
+  });
+
+  const DIVIDER_COLOR = `var(--divider-color, rgba(${RGB.NEUTRAL},.2))`;
+
   const COLOR = Object.freeze({
     OCCUPIED: "#4caf50",
     UNOCCUPIED: "#9e9e9e",
@@ -312,37 +320,45 @@
     PRIOR: "#ffc107",
     ENVIRONMENTAL: "#29b6f6",
     PROBABILITY: "#42a5f5",
-    BORDER_OCCUPIED: "1px solid rgba(76,175,80,.45)",
-    BORDER_DECAYING: "1px solid rgba(255,152,0,.45)",
-    BORDER_PRIOR: "1px solid rgba(255,193,7,.45)",
-    BORDER_DEFAULT: "1px solid var(--divider-color, rgba(128,128,128,.2))",
-    SENSOR_BG_ACTIVE: "rgba(76,175,80,.26)",
-    SENSOR_BG_DECAY: "rgba(255,152,0,.28)",
-    SENSOR_BORDER_ACTIVE: "1px solid rgba(76,175,80,.65)",
-    SENSOR_BORDER_DECAY: "1px solid rgba(255,152,0,.6)",
-    TRACK_IDLE: "rgba(128,128,128,.18)",
-    TRACK_SENSOR_IDLE: "rgba(128,128,128,.15)",
-    TRACK_DECAY: "rgba(255,152,0,.2)",
-    TRACK_SENSOR_DECAY: "rgba(255,152,0,.18)",
-    CHART_AREA: "rgba(66, 165, 245, 0.16)",
-    CHART_TH_HISTORY: "rgba(255, 152, 0, 0.55)",
+    BORDER_OCCUPIED: `1px solid rgba(${RGB.OCCUPIED},.45)`,
+    BORDER_DECAYING: `1px solid rgba(${RGB.DECAYING},.45)`,
+    BORDER_PRIOR: `1px solid rgba(${RGB.PRIOR},.45)`,
+    BORDER_DEFAULT: `1px solid ${DIVIDER_COLOR}`,
+    SENSOR_BG_ACTIVE: `rgba(${RGB.OCCUPIED},.26)`,
+    SENSOR_BG_DECAY: `rgba(${RGB.DECAYING},.28)`,
+    SENSOR_BORDER_ACTIVE: `1px solid rgba(${RGB.OCCUPIED},.65)`,
+    SENSOR_BORDER_DECAY: `1px solid rgba(${RGB.DECAYING},.6)`,
+    TRACK_IDLE: `rgba(${RGB.NEUTRAL},.18)`,
+    TRACK_SENSOR_IDLE: `rgba(${RGB.NEUTRAL},.15)`,
+    TRACK_DECAY: `rgba(${RGB.DECAYING},.2)`,
+    TRACK_SENSOR_DECAY: `rgba(${RGB.DECAYING},.18)`,
+    CHART_AREA: `rgba(${RGB.PROBABILITY}, 0.16)`,
+    CHART_TH_HISTORY: `rgba(${RGB.DECAYING}, 0.55)`,
     CHART_PILL_TEXT: "#111",
     DISABLED_TEXT: "var(--disabled-text-color, #888)",
     TEXT_PRIMARY: "var(--primary-text-color)",
     TEXT_SECONDARY: "var(--secondary-text-color)",
     CARD_BG: "var(--ha-card-background, var(--card-background-color))",
-    FLOOR_BANNER_BG: "var(--secondary-background-color, rgba(128,128,128,.08))",
+    FLOOR_BANNER_BG: `var(--secondary-background-color, rgba(${RGB.NEUTRAL},.08))`,
   });
 
   const CHART_CLASS = Object.freeze({
+    HEADER: "header",
+    TITLE_GROUP: "title-group",
     TITLE: "title",
     META: "meta",
     CHART: "chart",
     RANGES_WRAP: "ranges-wrap",
+    RANGES: "ranges",
     RANGE_BTN: "range-btn",
     ACTIVE: "active",
     EDITABLE: "editable",
     HISTORY_LINK: "history-link",
+    GRID: "grid",
+    TICK: "tick",
+    AREA: "area",
+    LINE: "line",
+    TH_HISTORY: "th-history",
     TH_LINE: "th-line",
     TH_PILL: "th-pill",
     TH_TEXT: "th-text",
@@ -379,10 +395,8 @@
     PENDING_THRESHOLD_MS: 2_500,
     DRAG_DEADZONE_PX: 4,
     COUNTDOWN_TICK_MS: TIME_MS.SECOND,
-    PROB_CLAMP_MIN: 0.01,
-    PROB_CLAMP_MAX: 0.99,
-    DECAY_MIN_FACTOR: 0.05,
-    LOGIT_EPSILON: 0.001,
+    LOCALIZE_RETRY_DELAY_MS: 250,
+    LOCALIZE_MAX_RETRIES: 20,
     ADJACENCY_SEARCH_BUDGET: 5_000,
   });
 
@@ -682,10 +696,10 @@
     `floor-${slug(group.label)}-${slug(group.floorId || group.label)}`;
 
   function resolveDashboardPath() {
-    return (
-      window.location.pathname.split("/").filter(Boolean)[0] ||
-      DEFAULTS.DASHBOARD_PATH
-    );
+    const first = window.location.pathname.split("/").filter(Boolean)[0];
+    return first && first !== CONFIG_PATH_SEGMENT
+      ? first
+      : DEFAULTS.DASHBOARD_PATH;
   }
 
   // --- Localization helpers ---
@@ -715,7 +729,13 @@
           integration: [DOMAIN],
         }),
       )
-      .then((res) => res?.resources || {})
+      .then((res) => {
+        const resources = res?.resources || {};
+        if (!Object.keys(resources).length) {
+          TRANSLATION_CACHE.delete(cacheKey);
+        }
+        return resources;
+      })
       .catch((err) => {
         TRANSLATION_CACHE.delete(cacheKey);
         throw err;
@@ -782,7 +802,7 @@
         {
           color: style.color,
           border: style.border,
-          label: style.labelKey ? t(style.labelKey) : "",
+          label: style.labelKey ? escapeHtmlText(t(style.labelKey)) : "",
         },
       ]),
     );
@@ -793,11 +813,12 @@
       Object.entries(SENSOR_STATE_STYLE).map(([state, style]) => {
         let label = "";
         if (style.labelKey) {
+          const prefix = escapeHtmlText(style.labelPrefix || "");
           const text = escapeHtmlText(t(style.labelKey));
           const attrs = style.labelColor
             ? `style='color:${style.labelColor}'`
             : `style='opacity:${style.labelOpacity}'`;
-          label = `<span ${attrs}>${style.labelPrefix || ""}${text}</span>`;
+          label = `<span ${attrs}>${prefix}${text}</span>`;
         }
         return [
           state,
@@ -891,19 +912,8 @@
     );
   }
 
-  function findEntity(entities, spec, includeDisabled = false) {
-    return entities.find(
-      (entity) =>
-        (includeDisabled || !entity.disabled_by) &&
-        matchesEntitySpec(entity, spec),
-    )?.entity_id;
-  }
-
-  function collectEntitySeries(items, spec, getEntities, getName) {
-    return items.flatMap((item) => {
-      const entity = findEntity(getEntities(item), spec);
-      return entity ? [{ entity, name: getName(item) }] : [];
-    });
+  function findEntity(entities, spec) {
+    return entities.find((entity) => matchesEntitySpec(entity, spec))?.entity_id;
   }
 
   function gridSection(cards, columns = DEFAULTS.VIEW_COLUMNS) {
@@ -925,12 +935,7 @@
     return card ? gridSection([card], columns) : undefined;
   }
 
-  function headingSection(
-    heading,
-    icon,
-    cards,
-    { columns = DEFAULTS.VIEW_COLUMNS, tapAction } = {},
-  ) {
+  function headingSection(heading, icon, cards) {
     const live = cards.filter(Boolean);
     if (!live.length) return undefined;
     return gridSection(
@@ -940,11 +945,10 @@
           heading,
           heading_style: HEADING_STYLE.TITLE,
           icon,
-          ...(tapAction ? { tap_action: tapAction } : {}),
         },
         ...live,
       ],
-      columns,
+      DEFAULTS.VIEW_COLUMNS,
     );
   }
 
@@ -1246,7 +1250,11 @@
 
   // Inline finite-number parser for button-card templates (handles HA "unavailable"/"unknown" safely).
   const NUM_HELPER_JS =
-    "const num = (v, fb = 0) => { const n = parseFloat(v); return Number.isFinite(n) ? n : fb; };";
+    "const num = (v, fb = 0) => { if (v === null || v === undefined || typeof v === 'boolean' || (typeof v === 'string' && v.trim() === '')) return fb; const n = Number(v); return Number.isFinite(n) ? n : fb; };";
+
+  // Inline HTML escaper for dynamic strings inserted into button-card HTML templates.
+  const ESC_HTML_HELPER_JS =
+    "const esc = (v) => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\"', '&quot;').replaceAll(\"'\", '&#39;');";
 
   const headlineHtmlExpr = (colorExpr, labelExpr) =>
     `"<span style='white-space:nowrap'><span style='color:" + (${colorExpr}) + "'>●</span> <span style='color:${COLOR.TEXT_SECONDARY}'>" + (${labelExpr}) + "</span></span>"`;
@@ -1258,7 +1266,7 @@
     `"<div style='display:flex;justify-content:space-between;align-items:baseline;width:100%'>" + (${leftExpr}) + (${rightExpr}) + "</div>"`;
 
   const countdownHtmlExpr = (colorExpr, remainingExpr, extraStyle = "") =>
-    `"<span style='color:" + (${colorExpr}) + "${extraStyle ? `;${extraStyle}` : ""}'>${DECAY_ICON_PREFIX}<span class='${COUNTDOWN_TEXT_CLASS}'>" + formatRemaining(${remainingExpr}) + "</span></span>"`;
+    `"<span style='color:" + (${colorExpr}) + "${extraStyle ? `;${extraStyle}` : ""}'>${DECAY_ICON_PREFIX}<span class='${COUNTDOWN_TEXT_CLASS}'>" + esc(formatRemaining(${remainingExpr})) + "</span></span>"`;
 
   const probabilityPctHtmlExpr = (valueExpr, colorExpr, suffixExpr = '""') =>
     `(${valueExpr} !== null ? "<span style='white-space:nowrap'><span style='font-weight:700;color:" + (${colorExpr}) + "'>" + Math.round(${valueExpr}) + "%</span>" + (${suffixExpr}) + "</span>" : "<span></span>")`;
@@ -1285,13 +1293,6 @@
     });
     const imminentLiteral = JSON.stringify(t(I18N_KEY.DECAY_IMMINENT));
     return `
-      const decaySecondsForRatio = (halfLife, fromFactor, toFactor) =>
-        halfLife > 0
-          ? Math.max(
-              0,
-              Math.round((halfLife * Math.log(fromFactor / toFactor)) / Math.LN2),
-            )
-          : 0;
       const formatRemaining = (sec) =>
         sec >= ${SECONDS_PER_MINUTE}
           ? (${minSecExpr})
@@ -1313,49 +1314,62 @@
         }
         return remainingFromTarget(this._cdEnd);
       };
-      const startCountdownFrom = (seconds, updatedAt) => {
-        const parsedBase = updatedAt ? new Date(updatedAt).getTime() : NaN;
-        const base = Number.isFinite(parsedBase) ? parsedBase : Date.now();
-        return startCountdownTo(base + seconds * ${TIME_MS.SECOND});
-      };
     `;
   }
 
-  function buildDecayCountdownHelperJs(t) {
-    return `
-      ${buildCountdownTimerHelperJs(t)}
-      const computeDecaySeconds = () => {
-        const clampProb = (v) => Math.min(${DEFAULTS.PROB_CLAMP_MAX}, Math.max(${DEFAULTS.PROB_CLAMP_MIN}, v / ${PERCENT_SCALE}));
-        const logit = (p) => Math.log(p / (1 - p));
-        const clampedDecay = Math.max(${DEFAULTS.DECAY_MIN_FACTOR}, maxDecay);
-        const halfLife = dominantDecay ? dominantDecay.${DECAY_ITEM_KEY.HALF_LIFE} : 0;
-        const lp = logit(clampProb(probability));
-        const lt = logit(clampProb(threshold));
-        const l0 = logit(clampProb(prior));
-        const ratio = lp > l0 + ${DEFAULTS.LOGIT_EPSILON} ? Math.max(0, Math.min(1, (lt - l0) / (lp - l0))) : 0;
-        const crossing = Math.max(clampedDecay * ratio, ${DEFAULTS.DECAY_MIN_FACTOR});
-        return decaySecondsForRatio(halfLife, clampedDecay, crossing);
-      };
-      const startCountdown = (seconds) =>
-        startCountdownFrom(seconds, probEntity?.last_updated || entity?.last_updated);
-    `;
+  function buildTemplateContext(t, entityResources) {
+    const areaModes = resolveAreaModeStyles(t);
+    const escT = (key, placeholders) => escapeHtmlText(t(key, placeholders));
+    return {
+      areaModeStylesJson: JSON.stringify(areaModes),
+      aggregateModeStylesJson: JSON.stringify({
+        [AREA_MODE.LIVE]: areaModes[AREA_MODE.LIVE],
+        [AREA_MODE.UNOCCUPIED]: areaModes[AREA_MODE.UNOCCUPIED],
+      }),
+      sensorStateStylesJson: JSON.stringify(resolveSensorStateStyles(t)),
+      countdownHelperJs: buildCountdownTimerHelperJs(t),
+      priorExpr: templateStringToJsExpr(escT(I18N_KEY.PRIOR_READING), {
+        value: "Math.round(priorValue)",
+      }),
+      occupiedLabel: JSON.stringify(escT(I18N_KEY.STATE_OCCUPIED)),
+      unoccupiedLabel: JSON.stringify(escT(I18N_KEY.STATE_UNOCCUPIED)),
+      occupiedFallback: JSON.stringify(t(I18N_KEY.STATE_OCCUPIED)),
+      unoccupiedFallback: JSON.stringify(t(I18N_KEY.STATE_UNOCCUPIED)),
+      holdingLabel: JSON.stringify(escT(I18N_KEY.DECAY_HOLDING)),
+      countPrimary: JSON.stringify(escT(I18N_KEY.COUNT_PRIMARY)),
+      countDecaying: JSON.stringify(escT(I18N_KEY.COUNT_DECAYING)),
+      countEnvironmental: JSON.stringify(escT(I18N_KEY.COUNT_ENVIRONMENTAL)),
+      occupiedOneExpr: templateStringToJsExpr(
+        escT(I18N_KEY.OCCUPIED_AREAS_ONE),
+        { occupied: "occupiedCount", total: "total" },
+      ),
+      occupiedOtherExpr: templateStringToJsExpr(
+        escT(I18N_KEY.OCCUPIED_AREAS_OTHER),
+        { occupied: "occupiedCount", total: "total" },
+      ),
+      decayPctExpr: templateStringToJsExpr(escT(I18N_KEY.SENSOR_DECAY_PCT), {
+        percent: "decayPct",
+      }),
+      activityLabelsJson: JSON.stringify(
+        extractActivityLabels(entityResources),
+      ),
+      sensorIconTemplate: buildSensorIconTemplate(),
+    };
   }
 
   /**
    * Shared state-resolution prelude for per-area button-card JS templates.
    * Defines: num, probEntity, occupied, thresholdValue, threshold, probabilityValue,
    * probability, active, decaying, dominantDecay, maxDecay, primary, environmental,
-   * priorValue, prior, hasDecayClearAt, decayClearAtMs, hasValidClearAt, mode,
-   * modeStyle, stateColor.
+   * priorValue, prior, decayClearAtMs, hasValidClearAt, mode, modeStyle, stateColor.
    */
   function areaStatePrelude(
     statusId,
     probabilityId,
     thresholdId,
     priorId,
-    t = () => "",
+    areaModeStylesJson,
   ) {
-    const modeStylesJson = JSON.stringify(resolveAreaModeStyles(t));
     const sensorPrefix = JSON.stringify(`${ENTITY_DOMAIN.SENSOR}${ENTITY_ID_SEP}`);
     const envAttrKey = JSON.stringify(ENTITY_ATTR.ENVIRONMENTAL_ENTITIES);
     return `
@@ -1370,12 +1384,12 @@
         ? statusEntity.state === ${JSON.stringify(ENTITY_STATE.ON)}
         : (probabilityValue !== null && probabilityValue >= threshold);
       const active = probEntity?.attributes?.${ENTITY_ATTR.ACTIVE_ENTITIES} || [];
-      const halfLives = probEntity?.attributes?.${ENTITY_ATTR.DECAYING_HALF_LIVES} || {};
-      const decaying = (probEntity?.attributes?.${ENTITY_ATTR.DECAYING_ENTITIES} || []).map((item) => {
-        const id = typeof item === "string" ? item : item.${DECAY_ITEM_KEY.ENTITY_ID};
-        const factor = typeof item === "string" ? 0 : num(item.${DECAY_ITEM_KEY.DECAY_FACTOR}, 0);
-        return { ${DECAY_ITEM_KEY.ENTITY_ID}: id, ${DECAY_ITEM_KEY.DECAY_FACTOR}: factor, ${DECAY_ITEM_KEY.HALF_LIFE}: num(halfLives[id], 0) };
-      });
+      const decaying = (probEntity?.attributes?.${ENTITY_ATTR.DECAYING_ENTITIES} || [])
+        .filter((item) => item && typeof item === "object" && item.${DECAY_ITEM_KEY.ENTITY_ID})
+        .map((item) => ({
+          ${DECAY_ITEM_KEY.ENTITY_ID}: item.${DECAY_ITEM_KEY.ENTITY_ID},
+          ${DECAY_ITEM_KEY.DECAY_FACTOR}: num(item.${DECAY_ITEM_KEY.DECAY_FACTOR}, 0),
+        }));
       const dominantDecay = decaying.reduce(
         (best, item) => (!best || item.${DECAY_ITEM_KEY.DECAY_FACTOR} > best.${DECAY_ITEM_KEY.DECAY_FACTOR} ? item : best),
         null
@@ -1393,8 +1407,6 @@
       const sensorPrior = ${priorId} ? num(states[${priorId}]?.state, null) : null;
       const priorValue = attrPrior !== null ? attrPrior * ${PERCENT_SCALE} : sensorPrior;
       const prior = priorValue ?? 0;
-      const hasDecayClearAt =
-        probEntity?.attributes != null && "${ENTITY_ATTR.DECAY_CLEAR_AT}" in probEntity.attributes;
       const decayClearAtMs =
         typeof probEntity?.attributes?.${ENTITY_ATTR.DECAY_CLEAR_AT} === "string"
           ? Date.parse(probEntity.attributes.${ENTITY_ATTR.DECAY_CLEAR_AT})
@@ -1408,7 +1420,7 @@
         return environmental.length > 0 ? "${AREA_MODE.ENVIRONMENTAL}" : "${AREA_MODE.SUPPORT}";
       };
       const mode = resolveMode();
-      const modeStyle = (${modeStylesJson})[mode];
+      const modeStyle = (${areaModeStylesJson})[mode];
       const stateColor = modeStyle.color;
     `;
   }
@@ -1420,7 +1432,7 @@
       const active = pr?.attributes?.${ENTITY_ATTR.ACTIVE_ENTITIES} || [];
       const decaying = pr?.attributes?.${ENTITY_ATTR.DECAYING_ENTITIES} || [];
       const entityId = entity?.entity_id;
-      const decay = decaying.find((item) => (item.${DECAY_ITEM_KEY.ENTITY_ID} || item) === entityId);
+      const decay = decaying.find((item) => item?.${DECAY_ITEM_KEY.ENTITY_ID} === entityId);
       const isActive = active.includes(entityId);
       const resolveSensorState = () => {
         if (decay) return "${SENSOR_STATE.DECAY}";
@@ -1434,41 +1446,19 @@
     `);
   }
 
-  function buildPriorReadingExpr(t) {
-    return templateStringToJsExpr(t(I18N_KEY.PRIOR_READING), {
-      value: "Math.round(priorValue)",
-    });
-  }
-
   function buildAggregateStatusTemplates(
     statusId,
     probabilityId,
     priorId,
     memberStatusIds,
-    t,
+    templateCtx,
   ) {
-    const areaModes = resolveAreaModeStyles(t);
-    const modeStylesJson = JSON.stringify({
-      [AREA_MODE.LIVE]: areaModes[AREA_MODE.LIVE],
-      [AREA_MODE.UNOCCUPIED]: areaModes[AREA_MODE.UNOCCUPIED],
-    });
-    const occupiedLabel = JSON.stringify(t(I18N_KEY.STATE_OCCUPIED));
-    const unoccupiedLabel = JSON.stringify(t(I18N_KEY.STATE_UNOCCUPIED));
-    const priorExpr = buildPriorReadingExpr(t);
-    const occupiedOneExpr = templateStringToJsExpr(
-      t(I18N_KEY.OCCUPIED_AREAS_ONE),
-      { occupied: "occupiedCount", total: "total" },
-    );
-    const occupiedOtherExpr = templateStringToJsExpr(
-      t(I18N_KEY.OCCUPIED_AREAS_OTHER),
-      { occupied: "occupiedCount", total: "total" },
-    );
     const aggregatePrelude = `
       ${NUM_HELPER_JS}
       const occupied = ${statusId} ? states[${statusId}]?.state === ${JSON.stringify(ENTITY_STATE.ON)} : false;
-      const modeStyle = (${modeStylesJson})[occupied ? "${AREA_MODE.LIVE}" : "${AREA_MODE.UNOCCUPIED}"];
+      const modeStyle = (${templateCtx.aggregateModeStylesJson})[occupied ? "${AREA_MODE.LIVE}" : "${AREA_MODE.UNOCCUPIED}"];
       const stateColor = modeStyle.color;
-      const label = occupied ? ${occupiedLabel} : ${unoccupiedLabel};
+      const label = occupied ? ${templateCtx.occupiedLabel} : ${templateCtx.unoccupiedLabel};
     `;
     return {
       stateColor: jsTemplate(`${aggregatePrelude} return stateColor;`),
@@ -1485,7 +1475,7 @@
         const priorValue = ${priorId} ? num(states[${priorId}]?.state, null) : null;
         const probColor = occupied ? stateColor : "${COLOR.TEXT_PRIMARY}";
         const leftHtml = priorValue !== null
-          ? ${statusLabelHtmlExpr("false", "stateColor", priorExpr)}
+          ? ${statusLabelHtmlExpr("false", "stateColor", templateCtx.priorExpr)}
           : "<span></span>";
         const pctHtml = ${probabilityPctHtmlExpr("probValue", "probColor")};
         return ${readingRowHtmlExpr("leftHtml", "pctHtml")};
@@ -1495,7 +1485,7 @@
         const total = ids.length;
         if (!total) return "";
         const occupiedCount = ids.filter((id) => states[id]?.state === ${JSON.stringify(ENTITY_STATE.ON)}).length;
-        const ratio = total === 1 ? (${occupiedOneExpr}) : (${occupiedOtherExpr});
+        const ratio = total === 1 ? (${templateCtx.occupiedOneExpr}) : (${templateCtx.occupiedOtherExpr});
         return occupiedCount
           ? "<span style='color:${COLOR.OCCUPIED}'>" + ratio + "</span>"
           : "<span style='color:${COLOR.TEXT_SECONDARY}'>" + ratio + "</span>";
@@ -1510,12 +1500,11 @@
     };
   }
 
-  function buildAreaReadingTemplate(prelude, t) {
-    const holdingLiteral = JSON.stringify(t(I18N_KEY.DECAY_HOLDING));
-    const priorExpr = buildPriorReadingExpr(t);
+  function buildAreaReadingTemplate(prelude, templateCtx) {
     return jsTemplate(`
       ${prelude}
-      ${buildDecayCountdownHelperJs(t)}
+      ${ESC_HTML_HELPER_JS}
+      ${templateCtx.countdownHelperJs}
       const probColor = occupied ? stateColor : "${COLOR.TEXT_PRIMARY}";
       const thresholdPart = thresholdValue !== null
         ? "<span style='color:${COLOR.TEXT_SECONDARY};opacity:.75'> / " + Math.round(thresholdValue) + "%</span>"
@@ -1523,20 +1512,18 @@
       const pctHtml = ${probabilityPctHtmlExpr("probabilityValue", "probColor", "thresholdPart")};
       let leftHtml = "";
       if (mode === "${AREA_MODE.DECAYING}") {
-        if (hasDecayClearAt && !hasValidClearAt) {
-          stopCountdown();
-          leftHtml = ${statusLabelHtmlExpr("true", "stateColor", holdingLiteral)};
-        } else {
-          const remaining = hasValidClearAt
-            ? startCountdownTo(decayClearAtMs)
-            : startCountdown(computeDecaySeconds());
+        if (hasValidClearAt) {
+          const remaining = startCountdownTo(decayClearAtMs);
           leftHtml = ${countdownHtmlExpr("stateColor", "remaining", "font-weight:600")};
+        } else {
+          stopCountdown();
+          leftHtml = ${statusLabelHtmlExpr("true", "stateColor", templateCtx.holdingLabel)};
         }
       } else {
         stopCountdown();
         const showPrior = mode === "${AREA_MODE.UNOCCUPIED}" || mode === "${AREA_MODE.LIVE}";
         const modeLabel = showPrior
-          ? (priorValue !== null ? (${priorExpr}) : "")
+          ? (priorValue !== null ? (${templateCtx.priorExpr}) : "")
           : modeStyle.label;
         leftHtml = modeLabel
           ? ${statusLabelHtmlExpr("occupied && !showPrior", "stateColor", "modeLabel")}
@@ -1546,39 +1533,32 @@
     `);
   }
 
-  function buildAreaStatusTemplates(prelude, activityId, t, entityResources) {
+  function buildAreaStatusTemplates(prelude, activityId, templateCtx) {
     const unavailableJson = JSON.stringify(UNAVAILABLE_STATES);
-    const activityLabelsJson = JSON.stringify(
-      extractActivityLabels(entityResources),
-    );
-    const occupiedFallback = JSON.stringify(t(I18N_KEY.STATE_OCCUPIED));
-    const unoccupiedFallback = JSON.stringify(t(I18N_KEY.STATE_UNOCCUPIED));
-    const countPrimary = JSON.stringify(t(I18N_KEY.COUNT_PRIMARY));
-    const countDecaying = JSON.stringify(t(I18N_KEY.COUNT_DECAYING));
-    const countEnvironmental = JSON.stringify(t(I18N_KEY.COUNT_ENVIRONMENTAL));
     return {
       stateColor: jsTemplate(`${prelude} return stateColor;`),
       cardBorder: jsTemplate(`${prelude} return modeStyle.border;`),
       headline: jsTemplate(`
         ${prelude}
+        ${ESC_HTML_HELPER_JS}
         const activityState = ${activityId} ? states[${activityId}]?.state : null;
         const hasActivity = activityState && !(${unavailableJson}).includes(activityState);
-        const activityLabels = ${activityLabelsJson};
+        const activityLabels = ${templateCtx.activityLabelsJson};
         const activity = hasActivity
           ? (activityLabels[activityState] || activityState.replaceAll("_", " "))
-          : (occupied ? ${occupiedFallback} : ${unoccupiedFallback});
-        return ${headlineHtmlExpr("stateColor", "activity")};
+          : (occupied ? ${templateCtx.occupiedFallback} : ${templateCtx.unoccupiedFallback});
+        return ${headlineHtmlExpr("stateColor", "esc(activity)")};
       `),
-      reading: buildAreaReadingTemplate(prelude, t),
+      reading: buildAreaReadingTemplate(prelude, templateCtx),
       counts: jsTemplate(`
         ${prelude}
         if (!probEntity) return "";
         const countSpan = (label, count, color) =>
           count ? "<span style='color:" + color + "'>" + label + " " + count + "</span>" : label + " 0";
         return "<span style='color:${COLOR.TEXT_SECONDARY}'>" +
-          countSpan(${countPrimary}, primary.length, "${COLOR.OCCUPIED}") + " · " +
-          countSpan(${countDecaying}, decaying.length, "${COLOR.DECAYING}") + " · " +
-          countSpan(${countEnvironmental}, environmental.length, "${COLOR.ENVIRONMENTAL}") +
+          countSpan(${templateCtx.countPrimary}, primary.length, "${COLOR.OCCUPIED}") + " · " +
+          countSpan(${templateCtx.countDecaying}, decaying.length, "${COLOR.DECAYING}") + " · " +
+          countSpan(${templateCtx.countEnvironmental}, environmental.length, "${COLOR.ENVIRONMENTAL}") +
         "</span>";
       `),
       bar: jsTemplate(`
@@ -1649,41 +1629,27 @@
       const name = entity?.attributes?.friendly_name || entity?.entity_id?.split("${ENTITY_ID_SEP}")[1]?.replaceAll("_", " ") || "";
       const prefixes = ${prefixes};
       const prefix = prefixes.find((value) => name.toLowerCase().startsWith(value.toLowerCase() + " "));
-      return prefix ? name.slice(prefix.length + 1) : name;
+      const stripped = prefix ? name.slice(prefix.length + 1).trim() : "";
+      return stripped || name;
     `);
   }
 
-  function buildSensorCountdownTemplate(probabilityId, stateStylesJson, t) {
-    const decayPctExpr = templateStringToJsExpr(
-      t(I18N_KEY.SENSOR_DECAY_PCT),
-      { percent: "decayPct" },
-    );
+  function buildSensorCountdownTemplate(probabilityId, templateCtx) {
     return sensorStateTemplate(
       probabilityId,
-      stateStylesJson,
+      templateCtx.sensorStateStylesJson,
       `
-        ${buildCountdownTimerHelperJs(t)}
+        ${ESC_HTML_HELPER_JS}
+        ${templateCtx.countdownHelperJs}
         if (sensorState === "${SENSOR_STATE.DECAY}") {
           const rawExpires = entityId ? pr?.attributes?.${ENTITY_ATTR.DECAYING_EXPIRES_AT}?.[entityId] : null;
           const expiresAtMs = typeof rawExpires === "string" ? Date.parse(rawExpires) : NaN;
-          const halfLife = entityId ? num(pr?.attributes?.${ENTITY_ATTR.DECAYING_HALF_LIVES}?.[entityId], 0) : 0;
-          let remaining = null;
           if (Number.isFinite(expiresAtMs)) {
-            remaining = startCountdownTo(expiresAtMs);
-          } else if (halfLife > 0) {
-            const clampedDecay = Math.max(${DEFAULTS.DECAY_MIN_FACTOR}, decayFactor);
-            const seconds = decaySecondsForRatio(
-              halfLife,
-              clampedDecay,
-              ${DEFAULTS.DECAY_MIN_FACTOR},
-            );
-            remaining = startCountdownFrom(seconds, pr?.last_updated || entity?.last_updated);
-          }
-          if (remaining !== null) {
+            const remaining = startCountdownTo(expiresAtMs);
             return ${countdownHtmlExpr("stateStyle.iconColor", "remaining", "white-space:nowrap")};
           }
           stopCountdown();
-          return "<span style='color:" + stateStyle.iconColor + "'>${DECAY_ICON_PREFIX}" + (${decayPctExpr}) + "</span>";
+          return "<span style='color:" + stateStyle.iconColor + "'>${DECAY_ICON_PREFIX}" + (${templateCtx.decayPctExpr}) + "</span>";
         }
         stopCountdown();
         return stateStyle.label;
@@ -1691,15 +1657,14 @@
     );
   }
 
-  function buildSensorItemCard(area, probability, t) {
+  function buildSensorItemCard(area, probability, templateCtx) {
     const probabilityId = JSON.stringify(probability || "");
-    const stateStylesJson = JSON.stringify(resolveSensorStateStyles(t));
 
     return {
       type: CARD_TYPE.BUTTON,
       entity: ENTITY_PLACEHOLDER,
       triggers_update: [ENTITY_PLACEHOLDER, probability].filter(Boolean),
-      icon: buildSensorIconTemplate(),
+      icon: templateCtx.sensorIconTemplate,
       name: buildSensorNameTemplate(area),
       tap_action: { action: CARD_ACTION.MORE_INFO },
       styles: {
@@ -1709,7 +1674,7 @@
           padding: CARD_STYLE.PADDING,
           background: sensorStateTemplate(
             probabilityId,
-            stateStylesJson,
+            templateCtx.sensorStateStylesJson,
             `
               if (sensorState === "${SENSOR_STATE.DECAY}") {
                 return "linear-gradient(90deg, ${COLOR.SENSOR_BG_DECAY} " + decayPct + "%, ${COLOR.CARD_BG} " + decayPct + "%)";
@@ -1719,7 +1684,7 @@
           ),
           border: sensorStateTemplate(
             probabilityId,
-            stateStylesJson,
+            templateCtx.sensorStateStylesJson,
             "return stateStyle.border;",
           ),
         }),
@@ -1728,16 +1693,16 @@
           height: CARD_STYLE.ICON_SIZE,
           color: sensorStateTemplate(
             probabilityId,
-            stateStylesJson,
+            templateCtx.sensorStateStylesJson,
             "return stateStyle.iconColor;",
           ),
         }),
       },
       custom_fields: {
-        s: buildSensorCountdownTemplate(probabilityId, stateStylesJson, t),
+        s: buildSensorCountdownTemplate(probabilityId, templateCtx),
         bar: sensorStateTemplate(
           probabilityId,
-          stateStylesJson,
+          templateCtx.sensorStateStylesJson,
           `
             ${progressBarHelperJs(CARD_STYLE.SENSOR_BAR_HEIGHT_PX, CARD_STYLE.SENSOR_BAR_RADIUS_PX)}
             if (sensorState === "${SENSOR_STATE.DECAY}") return fillBar("${COLOR.TRACK_SENSOR_DECAY}", stateStyle.barColor, decayPct);
@@ -1771,65 +1736,21 @@
 
   // --- Card builders ---
 
-  function statusTimerCard(
-    area,
-    entities,
-    {
-      dashboardPath,
-      navigationPath,
-      gridOptions,
-      memberStatuses,
-      topMargin,
-      t,
-      entityResources,
-    } = {},
+  function buildStatusCardShell(
+    meta,
+    primaryEntity,
+    triggerEntities,
+    templates,
+    { navigationPath, gridOptions, isAggregate = false, topMargin } = {},
   ) {
-    const status = findEntity(entities, ENTITY_SPEC.STATUS);
-    const probability = findEntity(entities, ENTITY_SPEC.PROBABILITY);
-    const threshold = findEntity(entities, ENTITY_SPEC.THRESHOLD);
-    const activity = findEntity(entities, ENTITY_SPEC.ACTIVITY);
-    const prior = findEntity(entities, ENTITY_SPEC.PRIOR);
-    if (!status && !probability) return undefined;
-
-    const isAggregate = Array.isArray(memberStatuses);
-    const statusId = JSON.stringify(status || "");
-    const probabilityId = JSON.stringify(probability || "");
-    const priorId = JSON.stringify(prior || "");
-    const templates = isAggregate
-      ? buildAggregateStatusTemplates(
-          statusId,
-          probabilityId,
-          priorId,
-          JSON.stringify(memberStatuses),
-          t,
-        )
-      : buildAreaStatusTemplates(
-          areaStatePrelude(
-            statusId,
-            probabilityId,
-            JSON.stringify(threshold || ""),
-            priorId,
-            t,
-          ),
-          JSON.stringify(activity || ""),
-          t,
-          entityResources,
-        );
-    const triggerEntities = isAggregate
-      ? [status, probability, prior, ...memberStatuses]
-      : [status, probability, threshold, activity, prior];
-    const resolvedNavPath =
-      navigationPath ??
-      (dashboardPath ? `/${dashboardPath}/${areaViewPath(area)}` : undefined);
-
     return {
       type: CARD_TYPE.BUTTON,
-      entity: probability || status,
+      entity: primaryEntity,
       triggers_update: triggerEntities.filter(Boolean),
-      name: area.name,
-      icon: area.icon,
-      tap_action: resolvedNavPath
-        ? { action: CARD_ACTION.NAVIGATE, navigation_path: resolvedNavPath }
+      name: meta.name,
+      icon: meta.icon,
+      tap_action: navigationPath
+        ? { action: CARD_ACTION.NAVIGATE, navigation_path: navigationPath }
         : { action: CARD_ACTION.MORE_INFO },
       ...(gridOptions ? { grid_options: gridOptions } : {}),
       custom_fields: {
@@ -1850,6 +1771,43 @@
     };
   }
 
+  function areaStatusCard(
+    area,
+    entities,
+    { dashboardPath, gridOptions, templateCtx } = {},
+  ) {
+    const status = findEntity(entities, ENTITY_SPEC.STATUS);
+    const probability = findEntity(entities, ENTITY_SPEC.PROBABILITY);
+    const threshold = findEntity(entities, ENTITY_SPEC.THRESHOLD);
+    const activity = findEntity(entities, ENTITY_SPEC.ACTIVITY);
+    const prior = findEntity(entities, ENTITY_SPEC.PRIOR);
+    if (!status && !probability) return undefined;
+
+    const prelude = areaStatePrelude(
+      JSON.stringify(status || ""),
+      JSON.stringify(probability || ""),
+      JSON.stringify(threshold || ""),
+      JSON.stringify(prior || ""),
+      templateCtx.areaModeStylesJson,
+    );
+    const templates = buildAreaStatusTemplates(
+      prelude,
+      JSON.stringify(activity || ""),
+      templateCtx,
+    );
+    const navigationPath = dashboardPath
+      ? `/${dashboardPath}/${areaViewPath(area)}`
+      : undefined;
+
+    return buildStatusCardShell(
+      area,
+      probability || status,
+      [status, probability, threshold, activity, prior],
+      templates,
+      { navigationPath, gridOptions },
+    );
+  }
+
   function resolveFloorEntities(group, aggregateById, entitiesByDevice) {
     if (!group.floorId) return [];
     const floorDevice = aggregateById.get(
@@ -1858,11 +1816,16 @@
     return floorDevice ? entitiesByDevice.get(floorDevice.id) || [] : [];
   }
 
-  function floorTimerCard(
+  function floorStatusCard(
     group,
     floorEntities,
-    { gridOptions, navigationPath, topMargin, t } = {},
+    { gridOptions, navigationPath, topMargin, templateCtx } = {},
   ) {
+    const status = findEntity(floorEntities, ENTITY_SPEC.STATUS);
+    const probability = findEntity(floorEntities, ENTITY_SPEC.PROBABILITY);
+    const prior = findEntity(floorEntities, ENTITY_SPEC.PRIOR);
+    if (!status && !probability) return undefined;
+
     const floorMeta = {
       name: group.label,
       area_id: group.floorId || group.label,
@@ -1871,21 +1834,31 @@
     const memberStatuses = group.areas
       .map(({ entities }) => findEntity(entities, ENTITY_SPEC.STATUS))
       .filter(Boolean);
-    return statusTimerCard(floorMeta, floorEntities, {
-      gridOptions,
-      navigationPath,
-      memberStatuses,
-      topMargin,
-      t,
-    });
+    const templates = buildAggregateStatusTemplates(
+      JSON.stringify(status || ""),
+      JSON.stringify(probability || ""),
+      JSON.stringify(prior || ""),
+      JSON.stringify(memberStatuses),
+      templateCtx,
+    );
+
+    return buildStatusCardShell(
+      floorMeta,
+      probability || status,
+      [status, probability, prior, ...memberStatuses],
+      templates,
+      { navigationPath, gridOptions, isAggregate: true, topMargin },
+    );
   }
 
-  function sensorDecayCard(area, entities, t) {
+  function sensorDecayCard(area, entities, templateCtx, t) {
     const evidence = findEntity(entities, ENTITY_SPEC.EVIDENCE);
     if (!evidence) return undefined;
 
     const probability = findEntity(entities, ENTITY_SPEC.PROBABILITY);
-    const cardJson = JSON.stringify(buildSensorItemCard(area, probability, t));
+    const cardJson = JSON.stringify(
+      buildSensorItemCard(area, probability, templateCtx),
+    );
     const template = buildSensorAutoEntitiesTemplate(evidence, cardJson);
 
     return headingSection(
@@ -1903,7 +1876,6 @@
         card: { type: LAYOUT_TYPE.GRID, columns, square: false },
         card_param: AUTO_ENTITIES_CONFIG.CARD_PARAM,
         filter: { template },
-        sort: { method: AUTO_ENTITIES_CONFIG.SORT_METHOD },
       })),
     );
   }
@@ -1915,7 +1887,6 @@
       title: cardTitle,
       probability_entity: probability,
       threshold_entity: threshold,
-      hours_to_show: DEFAULTS.HISTORY_HOURS,
       grid_options: FULL_WIDTH_GRID,
     };
   }
@@ -1943,31 +1914,29 @@
 
   // --- View builders ---
 
-  function buildOrderedAreaCards(areas, dashboardPath, t, entityResources) {
+  function buildOrderedAreaCards(areas, dashboardPath, templateCtx) {
     return orderByAdjacency(areas)
       .map(({ area, entities }) =>
-        statusTimerCard(area, entities, {
+        areaStatusCard(area, entities, {
           dashboardPath,
-          t,
-          entityResources,
+          templateCtx,
         }),
       )
       .filter(Boolean);
   }
 
-  function areaView({ area, entities, threshold }, t, entityResources) {
+  function areaView({ area, entities, threshold }, t, templateCtx) {
     const probability = findEntity(entities, ENTITY_SPEC.PROBABILITY);
     const thresholdEntity = findEntity(entities, ENTITY_SPEC.THRESHOLD);
 
     const viewSections = [
       singleCardSection(
-        statusTimerCard(area, entities, {
+        areaStatusCard(area, entities, {
           gridOptions: FULL_WIDTH_GRID,
-          t,
-          entityResources,
+          templateCtx,
         }),
       ),
-      sensorDecayCard(area, entities, t),
+      sensorDecayCard(area, entities, templateCtx, t),
       singleCardSection(
         probabilityHistoryCard(
           t(I18N_KEY.PROBABILITY_HISTORY_TITLE),
@@ -1995,42 +1964,32 @@
     });
   }
 
-  function floorView(
-    group,
-    floorEntities,
-    dashboardPath,
-    t,
-    entityResources,
-  ) {
+  function floorView(group, floorEntities, dashboardPath, t, templateCtx) {
     const probability = findEntity(floorEntities, ENTITY_SPEC.PROBABILITY);
-    const threshold = findEntity(floorEntities, ENTITY_SPEC.THRESHOLD);
     const memberProbabilities = [
       ...(probability ? [{ entity: probability, name: group.label }] : []),
-      ...collectEntitySeries(
-        group.areas,
-        ENTITY_SPEC.PROBABILITY,
-        ({ entities }) => entities,
-        ({ area }) => area.name,
-      ),
+      ...group.areas.flatMap(({ area, entities }) => {
+        const entity = findEntity(entities, ENTITY_SPEC.PROBABILITY);
+        return entity ? [{ entity, name: area.name }] : [];
+      }),
     ];
 
     const viewSections = [
       singleCardSection(
-        floorTimerCard(group, floorEntities, {
+        floorStatusCard(group, floorEntities, {
           gridOptions: FULL_WIDTH_GRID,
-          t,
+          templateCtx,
         }),
       ),
       headingSection(
         t(I18N_KEY.AREAS_HEADING),
         ICON.AREAS_GROUP,
-        buildOrderedAreaCards(group.areas, dashboardPath, t, entityResources),
+        buildOrderedAreaCards(group.areas, dashboardPath, templateCtx),
       ),
       singleCardSection(
         probabilityHistoryCard(
           t(I18N_KEY.FLOOR_PROBABILITY_HISTORY_TITLE, { floor: group.label }),
           probability,
-          threshold,
         ),
       ),
       singleCardSection(
@@ -2181,8 +2140,7 @@
     aggregateById,
     entitiesByDevice,
     dashboardPath,
-    t,
-    entityResources,
+    templateCtx,
   ) {
     return sortedGroups
       .map((group, index) => {
@@ -2194,17 +2152,16 @@
           aggregateById,
           entitiesByDevice,
         );
-        const floorCard = floorTimerCard(group, floorEntities, {
+        const floorCard = floorStatusCard(group, floorEntities, {
           gridOptions: FULL_WIDTH_GRID,
           navigationPath,
           topMargin: index > 0 ? CARD_STYLE.FLOOR_SECTION_GAP : undefined,
-          t,
+          templateCtx,
         });
         const areaCards = buildOrderedAreaCards(
           group.areas,
           dashboardPath,
-          t,
-          entityResources,
+          templateCtx,
         );
         if (floorCard) {
           return gridSection([floorCard, ...areaCards], DEFAULTS.VIEW_COLUMNS);
@@ -2459,7 +2416,7 @@
     return items.map((item) => {
       const names = item.entities
         .map((entity) => formatRegistryEntityName(entity, entityResources))
-        .sort()
+        .sort((left, right) => left.localeCompare(right))
         .join(", ");
       return `- ${deviceMarkdownLink(item.name, item.deviceId)}: ${names}`;
     });
@@ -2477,7 +2434,8 @@
   function buildUnavailableCoreCard(unavailableCore, t) {
     if (!unavailableCore.length) return undefined;
     const rows = unavailableCore.map((item) => {
-      const names = item.entities
+      const names = [...item.entities]
+        .sort((left, right) => left.label.localeCompare(right.label))
         .map((entry) => `${entry.label} (\`${entry.state}\`)`)
         .join(", ");
       return `- ${deviceMarkdownLink(item.name, item.deviceId)}: ${names}`;
@@ -2537,7 +2495,7 @@
     entitiesByDevice,
     dashboardPath,
     t,
-    entityResources,
+    templateCtx,
   ) {
     return sortedGroups
       .filter((group) => group.floorId)
@@ -2552,7 +2510,7 @@
           floorEntities,
           dashboardPath,
           t,
-          entityResources,
+          templateCtx,
         );
       });
   }
@@ -2585,6 +2543,7 @@
     return {
       t,
       entityResources,
+      templateCtx: buildTemplateContext(t, entityResources),
       entitiesByDevice,
       configured,
       sortedGroups: groupAndSortByFloor(configured, floorsById, t),
@@ -2604,6 +2563,7 @@
     const {
       t,
       entityResources,
+      templateCtx,
       entitiesByDevice,
       configured,
       sortedGroups,
@@ -2621,8 +2581,7 @@
           aggregateById,
           entitiesByDevice,
           dashboardPath,
-          t,
-          entityResources,
+          templateCtx,
         ),
       }),
       sectionsView({
@@ -2652,9 +2611,9 @@
         entitiesByDevice,
         dashboardPath,
         t,
-        entityResources,
+        templateCtx,
       ),
-      ...configured.map((item) => areaView(item, t, entityResources)),
+      ...configured.map((item) => areaView(item, t, templateCtx)),
     ];
   }
 
@@ -2687,7 +2646,17 @@
     return Math.round((1 - relativeY / CHART_PLOT_HEIGHT) * PERCENT_SCALE);
   }
 
-  function resolveRangeWindow(rangeId, now, fallbackHours) {
+  function thresholdSvgCoords(value) {
+    const y = valueToSvgY(value);
+    return {
+      lineY: fmtCoord(y),
+      pillY: fmtCoord(y - CHART_LAYOUT.PILL_OFFSET_Y),
+      textY: fmtCoord(y + CHART_LAYOUT.PILL_TEXT_OFFSET_Y),
+      label: `${Math.round(value)}%`,
+    };
+  }
+
+  function resolveRangeWindow(rangeId, now) {
     const range =
       PROBABILITY_CHART_RANGE_BY_ID.get(rangeId) ||
       PROBABILITY_CHART_RANGE_BY_ID.get(DEFAULTS.FALLBACK_RANGE_ID);
@@ -2702,7 +2671,7 @@
         isMultiDay: false,
       };
     }
-    const hours = range.hours ?? fallbackHours;
+    const hours = range.hours ?? DEFAULTS.HISTORY_HOURS;
     return {
       startMs: now - hours * TIME_MS.HOUR,
       isMultiDay: hours > DEFAULTS.HISTORY_HOURS,
@@ -2711,15 +2680,36 @@
 
   function parseHistoryPoints(raw) {
     return (raw || [])
-      .map((pt) => ({
-        t: (pt.lu ?? pt.lc ?? 0) * TIME_MS.SECOND,
-        v: parseFiniteNumber(pt.s),
-      }))
+      .map((pt) => {
+        const ts = pt.lu ?? pt.lc;
+        return {
+          t: ts == null ? NaN : Number(ts) * TIME_MS.SECOND,
+          v: parseFiniteNumber(pt.s),
+        };
+      })
       .filter((pt) => Number.isFinite(pt.t) && pt.v !== null);
   }
 
-  function extendSeriesToNow(points, currentValue, now) {
+  function clipPointsToWindow(points, startMs) {
     if (!points.length) return [];
+    let anchor = null;
+    const inWindow = [];
+    for (const pt of points) {
+      if (pt.t <= startMs) {
+        if (!anchor || pt.t >= anchor.t) {
+          anchor = pt;
+        }
+      } else {
+        inWindow.push(pt);
+      }
+    }
+    return anchor ? [{ t: startMs, v: anchor.v }, ...inWindow] : inWindow;
+  }
+
+  function extendSeriesToNow(points, currentValue, now) {
+    if (!points.length) {
+      return currentValue !== null ? [{ t: now, v: currentValue }] : [];
+    }
     return currentValue !== null
       ? [...points, { t: now, v: currentValue }]
       : points;
@@ -2835,11 +2825,11 @@
   const PROBABILITY_CARD_STYLES = `
     <style>
       ha-card { padding: 14px 16px 10px; border-radius: ${CARD_STYLE.RADIUS}; }
-      .header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
-      .title-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .${CHART_CLASS.HEADER} { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+      .${CHART_CLASS.TITLE_GROUP} { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .${CHART_CLASS.TITLE} { font-size: 16px; font-weight: 600; color: ${COLOR.TEXT_PRIMARY}; }
       .${CHART_CLASS.RANGES_WRAP} { display: inline-flex; align-items: center; gap: 10px; }
-      .ranges { display: inline-flex; gap: 4px; background: var(--secondary-background-color, rgba(128,128,128,.12)); padding: 2px; border-radius: 8px; }
+      .${CHART_CLASS.RANGES} { display: inline-flex; gap: 4px; background: var(--secondary-background-color, rgba(${RGB.NEUTRAL},.12)); padding: 2px; border-radius: 8px; }
       .${CHART_CLASS.RANGE_BTN} { border: none; background: transparent; color: ${COLOR.TEXT_SECONDARY}; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
       .${CHART_CLASS.RANGE_BTN}:hover { color: ${COLOR.TEXT_PRIMARY}; }
       .${CHART_CLASS.RANGE_BTN}.${CHART_CLASS.ACTIVE} { background: var(--primary-color, ${COLOR.PROBABILITY}); color: var(--text-primary-color, #fff); }
@@ -2852,11 +2842,11 @@
       .${CHART_CLASS.HISTORY_LINK}:hover { text-decoration: underline; }
       .${CHART_CLASS.HISTORY_LINK} ha-icon { --mdc-icon-size: 14px; }
       svg.${CHART_CLASS.CHART} { width: 100%; height: ${CHART_LAYOUT.HEIGHT}px; display: block; user-select: none; }
-      .grid { stroke: var(--divider-color, rgba(128,128,128,.2)); stroke-width: 1; }
-      .tick { fill: ${COLOR.TEXT_SECONDARY}; font-size: 11px; }
-      .area { fill: ${COLOR.CHART_AREA}; }
-      .line { fill: none; stroke: ${COLOR.PROBABILITY}; stroke-width: 2; stroke-linejoin: round; }
-      .th-history { fill: none; stroke: ${COLOR.CHART_TH_HISTORY}; stroke-width: 1.5; pointer-events: none; }
+      .${CHART_CLASS.GRID} { stroke: ${DIVIDER_COLOR}; stroke-width: 1; }
+      .${CHART_CLASS.TICK} { fill: ${COLOR.TEXT_SECONDARY}; font-size: 11px; }
+      .${CHART_CLASS.AREA} { fill: ${COLOR.CHART_AREA}; }
+      .${CHART_CLASS.LINE} { fill: none; stroke: ${COLOR.PROBABILITY}; stroke-width: 2; stroke-linejoin: round; }
+      .${CHART_CLASS.TH_HISTORY} { fill: none; stroke: ${COLOR.CHART_TH_HISTORY}; stroke-width: 1.5; pointer-events: none; }
       .${CHART_CLASS.TH_LINE} { stroke: ${COLOR.DECAYING}; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
       svg.${CHART_CLASS.CHART}.${CHART_CLASS.EDITABLE} .${CHART_CLASS.TH_HANDLE} { cursor: ns-resize; touch-action: none; }
       .${CHART_CLASS.TH_PILL} { fill: ${COLOR.DECAYING}; }
@@ -2872,7 +2862,6 @@
       this.attachShadow({ mode: "open" });
       this._points = [];
       this._thresholdPoints = [];
-      this._lastFetch = 0;
       this._nextFetchAt = 0;
       this._fetchToken = 0;
       this._fetching = false;
@@ -2893,12 +2882,6 @@
       this._translationsLang = "";
       this._translationsPendingLang = "";
       this._translationsLoaded = false;
-    }
-
-    static getStubConfig() {
-      return {
-        default_range: DEFAULTS.DEFAULT_RANGE_ID,
-      };
     }
 
     getCardSize() {
@@ -2944,11 +2927,7 @@
     }
 
     _resolveCurrentRange(now) {
-      return resolveRangeWindow(
-        this._selectedRangeId,
-        now,
-        this._fallbackHours(),
-      );
+      return resolveRangeWindow(this._selectedRangeId, now);
     }
 
     _buildHistoryUrl(now) {
@@ -2964,30 +2943,43 @@
       if (!config) {
         throw new Error("Invalid configuration");
       }
-      const prevProb = this._config?.probability_entity;
-      const prevTh = this._config?.threshold_entity;
-      this._config = config;
-      this._selectedRangeId = config.default_range || DEFAULTS.DEFAULT_RANGE_ID;
+      const prevConfig = this._config;
+      const resolveDefaultRange = (rawRange) =>
+        rawRange && PROBABILITY_CHART_RANGE_BY_ID.has(rawRange)
+          ? rawRange
+          : DEFAULTS.DEFAULT_RANGE_ID;
+      const prevDefaultRange = prevConfig
+        ? resolveDefaultRange(prevConfig.default_range)
+        : null;
+      const nextDefaultRange = resolveDefaultRange(config.default_range);
+      const entitiesChanged =
+        !prevConfig ||
+        config.probability_entity !== prevConfig.probability_entity ||
+        config.threshold_entity !== prevConfig.threshold_entity;
+      const defaultRangeChanged =
+        Boolean(prevConfig) && nextDefaultRange !== prevDefaultRange;
 
-      if (
-        config.probability_entity !== prevProb ||
-        config.threshold_entity !== prevTh
-      ) {
+      this._config = config;
+      if (!prevConfig || defaultRangeChanged) {
+        this._selectedRangeId = nextDefaultRange;
+      }
+
+      if (entitiesChanged) {
         this._resetHistoryState();
+      } else if (defaultRangeChanged) {
+        this._nextFetchAt = 0;
       }
 
       this._ensureMounted();
       this._updateView({ force: true });
       if (this._hass) {
         this._loadTranslations(this._hass);
-      }
-      if (
-        this._hass &&
-        this._lastFetch === 0 &&
-        !this._fetching &&
-        Date.now() >= this._nextFetchAt
-      ) {
-        this._fetchHistory();
+        if (
+          defaultRangeChanged ||
+          (!this._fetching && Date.now() >= this._nextFetchAt)
+        ) {
+          this._fetchHistory();
+        }
       }
     }
 
@@ -3033,18 +3025,7 @@
       if (!this._config) return;
 
       const now = Date.now();
-      const probVal = parseFiniteNumber(
-        hass?.states?.[this._config.probability_entity]?.state,
-      );
-      this._appendLivePoint(this._points, probVal, now);
-
-      const thVal = parseFiniteNumber(
-        hass?.states?.[this._config.threshold_entity]?.state,
-      );
-      if (thVal !== null) {
-        this._clearResolvedPendingThreshold(thVal, now);
-        this._appendLivePoint(this._thresholdPoints, thVal, now);
-      }
+      this._syncLivePoints(now);
 
       if (!this._fetching && now >= this._nextFetchAt) {
         this._fetchHistory();
@@ -3057,7 +3038,6 @@
     _resetHistoryState() {
       this._points = [];
       this._thresholdPoints = [];
-      this._lastFetch = 0;
       this._nextFetchAt = 0;
       this._fetchToken += 1;
       this._fetching = false;
@@ -3075,17 +3055,26 @@
       }
     }
 
-    _fallbackHours() {
-      return parseFiniteNumber(
-        this._config?.hours_to_show,
-        DEFAULTS.HISTORY_HOURS,
-      );
+    _appendLivePoint(points, value, now) {
+      if (value === null) return;
+      if (!points.length || points[points.length - 1].v !== value) {
+        points.push({ t: now, v: value });
+      }
     }
 
-    _appendLivePoint(points, value, now) {
-      if (value === null || !points.length) return;
-      if (points[points.length - 1].v !== value) {
-        points.push({ t: now, v: value });
+    _syncLivePoints(now) {
+      if (!this._hass || !this._config) return;
+      const probVal = parseFiniteNumber(
+        this._hass.states?.[this._config.probability_entity]?.state,
+      );
+      this._appendLivePoint(this._points, probVal, now);
+
+      const thVal = parseFiniteNumber(
+        this._hass.states?.[this._config.threshold_entity]?.state,
+      );
+      if (thVal !== null) {
+        this._clearResolvedPendingThreshold(thVal, now);
+        this._appendLivePoint(this._thresholdPoints, thVal, now);
       }
     }
 
@@ -3113,9 +3102,10 @@
           ? parseHistoryPoints(res?.[thresholdEntity])
           : [];
         const fetchedAt = Date.now();
-        this._lastFetch = fetchedAt;
+        this._syncLivePoints(fetchedAt);
         this._nextFetchAt = fetchedAt + DEFAULTS.HISTORY_REFRESH_MS;
       } catch {
+        if (token !== this._fetchToken) return;
         // Back off briefly on transient WS errors so rapid state updates don't spin retries.
         this._nextFetchAt = Date.now() + DEFAULTS.HISTORY_ERROR_BACKOFF_MS;
       } finally {
@@ -3153,9 +3143,17 @@
     _commitThreshold(value) {
       const entityId = this._config?.threshold_entity;
       if (!this._hass || !entityId || !Number.isFinite(value)) return;
-      this._hass.callService(ENTITY_DOMAIN.NUMBER, SERVICE.SET_VALUE, {
-        entity_id: entityId,
-        value,
+      Promise.resolve(
+        this._hass.callService(ENTITY_DOMAIN.NUMBER, SERVICE.SET_VALUE, {
+          entity_id: entityId,
+          value,
+        }),
+      ).catch(() => {
+        if (this._pendingThreshold === value) {
+          this._pendingThreshold = null;
+          this._pendingUntil = 0;
+          this._updateView({ force: true });
+        }
       });
     }
 
@@ -3198,12 +3196,12 @@
       this.shadowRoot.innerHTML = `
         ${PROBABILITY_CARD_STYLES}
         <ha-card>
-          <div class="header">
-            <div class="title-group">
+          <div class="${CHART_CLASS.HEADER}">
+            <div class="${CHART_CLASS.TITLE_GROUP}">
               <span class="${CHART_CLASS.TITLE}"></span>
               <div class="${CHART_CLASS.RANGES_WRAP}">
-                <div class="ranges">${renderButtons(true)}</div>
-                <div class="ranges">${renderButtons(false)}</div>
+                <div class="${CHART_CLASS.RANGES}">${renderButtons(true)}</div>
+                <div class="${CHART_CLASS.RANGES}">${renderButtons(false)}</div>
               </div>
             </div>
             <div class="${CHART_CLASS.META}"></div>
@@ -3231,9 +3229,14 @@
         .addEventListener("click", (event) => {
           const btn = event.target.closest(`.${CHART_CLASS.RANGE_BTN}`);
           const nextRangeId = btn?.dataset.range;
-          if (!nextRangeId || nextRangeId === this._selectedRangeId) return;
+          if (
+            !nextRangeId ||
+            !PROBABILITY_CHART_RANGE_BY_ID.has(nextRangeId) ||
+            nextRangeId === this._selectedRangeId
+          ) {
+            return;
+          }
           this._selectedRangeId = nextRangeId;
-          this._lastFetch = 0;
           this._nextFetchAt = 0;
           this._updateView({ force: true });
           this._fetchHistory();
@@ -3252,9 +3255,7 @@
     }
 
     _updateThresholdVisual(value) {
-      const y = valueToSvgY(value);
-      const yFixed = fmtCoord(y);
-      const rounded = Math.round(value);
+      const { lineY, pillY, textY, label } = thresholdSvgCoords(value);
       const thLine = this._svgEl?.querySelector(`.${CHART_CLASS.TH_LINE}`);
       const thPill = this._svgEl?.querySelector(`.${CHART_CLASS.TH_PILL}`);
       const thText = this._svgEl?.querySelector(`.${CHART_CLASS.TH_TEXT}`);
@@ -3263,14 +3264,13 @@
       );
 
       if (thLine) {
-        thLine.setAttribute("y1", yFixed);
-        thLine.setAttribute("y2", yFixed);
+        thLine.setAttribute("y1", lineY);
+        thLine.setAttribute("y2", lineY);
       }
-      if (thPill)
-        thPill.setAttribute("y", String(y - CHART_LAYOUT.PILL_OFFSET_Y));
+      if (thPill) thPill.setAttribute("y", pillY);
       if (thText) {
-        thText.setAttribute("y", String(y + CHART_LAYOUT.PILL_TEXT_OFFSET_Y));
-        thText.textContent = `${rounded}%`;
+        thText.setAttribute("y", textY);
+        thText.textContent = label;
       }
       if (thBadge) thBadge.textContent = this._formatThresholdLabel(value);
     }
@@ -3292,14 +3292,18 @@
     }
 
     _onDragStart(event) {
-      if (!this._canEdit || !event.target.closest(`.${CHART_CLASS.TH_HANDLE}`)) {
+      if (
+        event.button !== 0 ||
+        !this._canEdit ||
+        !event.target.closest(`.${CHART_CLASS.TH_HANDLE}`)
+      ) {
         return;
       }
       this._dragging = true;
       this._dragStartY = event.clientY;
       this._dragMoved = false;
       this._dragRect = this._svgEl.getBoundingClientRect();
-      this._svgEl.setPointerCapture(event.pointerId);
+      this._svgEl.setPointerCapture?.(event.pointerId);
     }
 
     _onDragMove(event) {
@@ -3330,6 +3334,7 @@
         this._updateThresholdVisual(finalValue);
         this._commitThreshold(finalValue);
       }
+      this._updateView({ force: true });
     }
 
     _bindDragHandlers() {
@@ -3345,14 +3350,17 @@
       this._svgEl.addEventListener("pointercancel", (event) =>
         this._cancelDrag(event),
       );
+      this._svgEl.addEventListener("lostpointercapture", (event) =>
+        this._cancelDrag(event),
+      );
     }
 
     _renderYAxisGridMarkup(padL, plotRight) {
       return CHART_LAYOUT.Y_TICKS.map((tickValue) => {
         const y = valueToSvgY(tickValue);
         const yFixed = fmtCoord(y);
-        return `<line class="grid" x1="${padL}" y1="${yFixed}" x2="${plotRight}" y2="${yFixed}" />
-          <text class="tick" x="${padL - CHART_LAYOUT.Y_LABEL_GAP}" y="${y + CHART_LAYOUT.Y_LABEL_OFFSET_Y}" text-anchor="end">${tickValue}%</text>`;
+        return `<line class="${CHART_CLASS.GRID}" x1="${padL}" y1="${yFixed}" x2="${plotRight}" y2="${yFixed}" />
+          <text class="${CHART_CLASS.TICK}" x="${padL - CHART_LAYOUT.Y_LABEL_GAP}" y="${y + CHART_LAYOUT.Y_LABEL_OFFSET_Y}" text-anchor="end">${tickValue}%</text>`;
       }).join("");
     }
 
@@ -3360,20 +3368,19 @@
       return xTicks
         .map(
           ({ x, label }) =>
-            `<text class="tick" x="${x}" y="${CHART_LAYOUT.HEIGHT - CHART_LAYOUT.X_LABEL_BOTTOM_GAP}" text-anchor="middle">${escapeHtmlText(label)}</text>`,
+            `<text class="${CHART_CLASS.TICK}" x="${x}" y="${CHART_LAYOUT.HEIGHT - CHART_LAYOUT.X_LABEL_BOTTOM_GAP}" text-anchor="middle">${escapeHtmlText(label)}</text>`,
         )
         .join("");
     }
 
     _renderThresholdMarkup(padL, plotRight, threshold) {
-      const thY = valueToSvgY(threshold);
-      const thYFixed = fmtCoord(thY);
+      const { lineY, pillY, textY, label } = thresholdSvgCoords(threshold);
       const pillX = plotRight + CHART_LAYOUT.PILL_GAP_X;
       const pillTextX = pillX + CHART_LAYOUT.PILL_WIDTH / 2;
-      return `<line class="${CHART_CLASS.TH_LINE}" x1="${padL}" y1="${thYFixed}" x2="${plotRight}" y2="${thYFixed}" />
+      return `<line class="${CHART_CLASS.TH_LINE}" x1="${padL}" y1="${lineY}" x2="${plotRight}" y2="${lineY}" />
         <g class="${CHART_CLASS.TH_HANDLE}">
-          <rect class="${CHART_CLASS.TH_PILL}" x="${pillX}" y="${thY - CHART_LAYOUT.PILL_OFFSET_Y}" width="${CHART_LAYOUT.PILL_WIDTH}" height="${CHART_LAYOUT.PILL_HEIGHT}" rx="${CHART_LAYOUT.PILL_RADIUS}" />
-          <text class="${CHART_CLASS.TH_TEXT}" x="${pillTextX}" y="${thY + CHART_LAYOUT.PILL_TEXT_OFFSET_Y}" text-anchor="middle">${Math.round(threshold)}%</text>
+          <rect class="${CHART_CLASS.TH_PILL}" x="${pillX}" y="${pillY}" width="${CHART_LAYOUT.PILL_WIDTH}" height="${CHART_LAYOUT.PILL_HEIGHT}" rx="${CHART_LAYOUT.PILL_RADIUS}" />
+          <text class="${CHART_CLASS.TH_TEXT}" x="${pillTextX}" y="${textY}" text-anchor="middle">${label}</text>
         </g>`;
     }
 
@@ -3384,9 +3391,9 @@
       return `
         ${this._renderYAxisGridMarkup(padL, plotRight)}
         ${this._renderXAxisTicksMarkup(xTicks)}
-        ${areaPath ? `<path class="area" d="${areaPath}" />` : ""}
-        ${linePath ? `<path class="line" d="${linePath}" />` : ""}
-        ${thHistoryPath ? `<path class="th-history" d="${thHistoryPath}" />` : ""}
+        ${areaPath ? `<path class="${CHART_CLASS.AREA}" d="${areaPath}" />` : ""}
+        ${linePath ? `<path class="${CHART_CLASS.LINE}" d="${linePath}" />` : ""}
+        ${thHistoryPath ? `<path class="${CHART_CLASS.TH_HISTORY}" d="${thHistoryPath}" />` : ""}
         ${hasThreshold ? this._renderThresholdMarkup(padL, plotRight, threshold) : ""}
       `;
     }
@@ -3466,9 +3473,10 @@
       now,
       { currentProb, currentThreshold, hasThreshold, threshold, canEdit },
     ) {
+      const rangeWindow = this._resolveCurrentRange(now);
       const geometry = buildChartGeometry(
         now,
-        this._resolveCurrentRange(now),
+        rangeWindow,
         hasThreshold,
         this._chartWidth,
         {
@@ -3476,9 +3484,17 @@
           locale: getHassLanguage(this._hass),
         },
       );
-      const pts = extendSeriesToNow(this._points, currentProb, now);
+      const pts = extendSeriesToNow(
+        clipPointsToWindow(this._points, rangeWindow.startMs),
+        currentProb,
+        now,
+      );
       const thPts = hasThreshold
-        ? extendSeriesToNow(this._thresholdPoints, currentThreshold, now)
+        ? extendSeriesToNow(
+            clipPointsToWindow(this._thresholdPoints, rangeWindow.startMs),
+            currentThreshold,
+            now,
+          )
         : [];
       const paths = {
         ...buildLinearPaths(pts, geometry.xOf, geometry.baseY),
@@ -3513,19 +3529,36 @@
 
   // --- Custom element & strategy registration ---
 
+  let localizeRetryTimer = null;
+
   function defineElementOnce(tag, ctor) {
     if (!customElements.get(tag)) {
       customElements.define(tag, ctor);
     }
   }
 
-  function localizeStrategyEntry(strategyEntry) {
+  function localizeStrategyEntry(
+    strategyEntry,
+    retriesLeft = DEFAULTS.LOCALIZE_MAX_RETRIES,
+  ) {
+    if (localizeRetryTimer !== null) {
+      clearTimeout(localizeRetryTimer);
+      localizeRetryTimer = null;
+    }
     const haRoot =
       typeof document !== "undefined"
         ? document.querySelector(HA_ROOT_TAG)
         : null;
     const hass = haRoot?.hass;
-    if (!hass) return;
+    if (!hass) {
+      if (retriesLeft > 0 && typeof setTimeout === "function") {
+        localizeRetryTimer = setTimeout(() => {
+          localizeRetryTimer = null;
+          localizeStrategyEntry(strategyEntry, retriesLeft - 1);
+        }, DEFAULTS.LOCALIZE_RETRY_DELAY_MS);
+      }
+      return;
+    }
     fetchTranslations(hass, TRANSLATION_CATEGORY.COMMON)
       .then((resources) => {
         const t = createTranslator(hass, resources);

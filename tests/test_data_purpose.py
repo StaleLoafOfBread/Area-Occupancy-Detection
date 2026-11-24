@@ -222,6 +222,16 @@ class TestIsPurposeHalfLife:
         """Unknown purpose strings cause False for any non-zero value."""
         assert Purpose.is_purpose_half_life(520, "not_a_real_purpose") is False
 
+    def test_non_finite_override_half_lives_are_ignored(self):
+        """NaN and infinite global overrides are ignored instead of returned."""
+        baseline = get_default_decay_half_life("social")
+        assert (
+            get_default_decay_half_life("social", {"social": float("nan")}) == baseline
+        )
+        assert (
+            get_default_decay_half_life("social", {"social": float("inf")}) == baseline
+        )
+
 
 class TestPurposeKeywordLexiconsAndInference:
     """Externalized keyword JSON lexicons, locale fallback, aliases, and icon inference."""

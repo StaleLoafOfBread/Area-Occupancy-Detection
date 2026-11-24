@@ -25,7 +25,6 @@ from .const import (
     ATTR_DECAY_FACTOR,
     ATTR_DECAYING_ENTITIES,
     ATTR_DECAYING_EXPIRES_AT,
-    ATTR_DECAYING_HALF_LIVES,
     ATTR_ENVIRONMENTAL_ENTITIES,
     DEFAULT_SENSOR_PRECISION,
 )
@@ -191,7 +190,6 @@ class ProbabilitySensor(AreaOccupancySensorBase):
     _unrecorded_attributes: frozenset[str] = frozenset(
         {
             ATTR_ADJACENT_AREAS,
-            ATTR_DECAYING_HALF_LIVES,
             ATTR_DECAYING_EXPIRES_AT,
             ATTR_DECAY_CLEAR_AT,
             ATTR_ENVIRONMENTAL_ENTITIES,
@@ -258,7 +256,6 @@ class ProbabilitySensor(AreaOccupancySensorBase):
                 }
                 for e in decaying
             ]
-            decaying_half_lives = {e.entity_id: e.decay.half_life for e in decaying}
             decaying_expires_at = {
                 e.entity_id: expires.isoformat()
                 for e in decaying
@@ -275,7 +272,6 @@ class ProbabilitySensor(AreaOccupancySensorBase):
             ATTR_ACTIVE_ENTITIES: active_entities,
             ATTR_ENVIRONMENTAL_ENTITIES: environmental_entities,
             ATTR_DECAYING_ENTITIES: decaying_entities,
-            ATTR_DECAYING_HALF_LIVES: decaying_half_lives,
             ATTR_DECAYING_EXPIRES_AT: decaying_expires_at,
             ATTR_DECAY_CLEAR_AT: decay_clear_at,
             ATTR_ADJACENT_AREAS: list(area.config.adjacent_areas or []),

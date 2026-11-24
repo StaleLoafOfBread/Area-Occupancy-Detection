@@ -30,6 +30,8 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.const import (
+    ATTR_MANUFACTURER,
+    ATTR_MODEL,
     STATE_CLOSED,
     STATE_HOME,
     STATE_IDLE,
@@ -72,6 +74,7 @@ from homeassistant.helpers.translation import (
     async_get_cached_translations,
     async_get_translations,
 )
+from homeassistant.loader import DATA_INTEGRATIONS
 
 from . import preview
 from .config_helpers import (
@@ -196,7 +199,6 @@ from .const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_APPLIANCE_ACTIVE_STATES,
-    DEFAULT_AUTO_DISCOVER_SENSORS,
     DEFAULT_BUTTON_PULSE_DURATION,
     DEFAULT_COVER_ACTIVE_STATES,
     DEFAULT_CUSTOM_BINARY_ACTIVE_STATES,
@@ -240,8 +242,6 @@ from .const import (
     DEFAULT_WEIGHT_WIFI_CLIENTS,
     DEFAULT_WEIGHT_WINDOW,
     DEFAULT_WINDOW_ACTIVE_STATE,
-    DEVICE_ATTR_MANUFACTURER,
-    DEVICE_ATTR_MODEL,
     DISCOVERY_EXCLUSION_RULES,
     DOMAIN,
     DURATION_FIELDS,
@@ -273,9 +273,11 @@ from .discovery import (
     async_trigger_area_discoveries,
     build_area_discovery_kwargs,
     build_suggested_area_config,
+    collect_excluded_sensor_ids,
     discover_area_sensors,
     discover_eligible_areas,
     get_enabled_discovery_domains,
+    is_auto_discovery_enabled,
     parse_tracked_auto_sensors,
     resolve_area_sensors,
     resolve_excluded_device_entity_ids,
@@ -365,7 +367,6 @@ STEP_GLOBAL_GENERAL: Final = "global_general"
 STEP_GLOBAL_EXCLUSIONS: Final = "global_exclusions"
 STEP_DISCOVERY_CONFIRM: Final = "discovery_confirm"
 
-_HASS_INTEGRATIONS_KEY: Final = "integrations"
 _TRANSLATION_SENSOR_TYPES: Final = "sensor_types"
 _TRANSLATION_GROUP_EXPANSION: Final = "group_expansion"
 _AREA_EXCLUSION_FIELD_KEYS: Final[tuple[str, ...]] = (
@@ -404,6 +405,10 @@ _PLACEHOLDER_EXCLUDED_ENTITIES_COUNT: Final = "excluded_entities_count"
 _PLACEHOLDER_EXCLUDED_INTEGRATIONS_COUNT: Final = "excluded_integrations_count"
 _ERROR_BASE: Final = "base"
 _ERROR_PROB_TRUE_MUST_EXCEED_FALSE: Final = "prob_true_must_exceed_false"
+_ERROR_AREA_REQUIRED: Final = "area_required"
+_ERROR_AREA_NOT_FOUND: Final = "area_not_found"
+_ERROR_MOTION_REQUIRED: Final = "motion_required"
+_PURPOSE_DEFAULT_PLACEHOLDER_SUFFIX: Final = "_default"
 _UTF8_ENCODING: Final = "utf-8"
 _ABORT_AREA_REQUIRED: Final = "area_required"
 _ABORT_AREA_NOT_FOUND: Final = "area_not_found"
@@ -669,7 +674,7 @@ def _get_excluded_integration_options(
     """Return sorted integration options pre-populated from the entity registry."""
     platforms = _collect_registered_platforms(hass, current)
     raw_integrations: Any = (
-        hass.data.get(_HASS_INTEGRATIONS_KEY, {})
+        hass.data.get(DATA_INTEGRATIONS, {})
         if hass is not None and isinstance(getattr(hass, "data", None), dict)
         else {}
     )
@@ -1641,7 +1646,7 @@ def _create_exclusion_fields(
             _multi_custom_list_selector(
                 _get_excluded_device_attribute_options(
                     hass,
-                    DEVICE_ATTR_MANUFACTURER,
+                    ATTR_MANUFACTURER,
                     CONF_EXCLUDED_MANUFACTURERS,
                     defaults,
                 )
@@ -1656,7 +1661,7 @@ def _create_exclusion_fields(
             ),
             _multi_custom_list_selector(
                 _get_excluded_device_attribute_options(
-                    hass, DEVICE_ATTR_MODEL, CONF_EXCLUDED_MODELS, defaults
+                    hass, ATTR_MODEL, CONF_EXCLUDED_MODELS, defaults
                 )
             ),
         ),
@@ -1734,9 +1739,7 @@ def _create_basics_step_schema(
     fields[
         vol.Optional(
             CONF_AUTO_DISCOVER_SENSORS,
-            default=current.get(
-                CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS
-            ),
+            default=is_auto_discovery_enabled(current),
         )
     ] = BooleanSelector()
     fields[vol.Optional(SECTION_AUTO_DISCOVERY_TYPES)] = section(
@@ -2234,20 +2237,18 @@ def _discover_for_sync(
     global_options: dict[str, Any],
 ) -> dict[str, list[str]]:
     """Run area discovery for ``_sync_discovered_and_excluded`` when enabled."""
-    if (
-        not hass
-        or not draft.get(CONF_AUTO_DISCOVER_SENSORS, DEFAULT_AUTO_DISCOVER_SENSORS)
-        or not draft.get(CONF_AREA_ID)
-    ):
+    if not hass or not is_auto_discovery_enabled(draft) or not draft.get(CONF_AREA_ID):
         return {}
     enabled_domains = get_enabled_discovery_domains(draft)
     if not enabled_domains:
         return {}
-    excluded_entities = [
-        *(draft.get(CONF_EXCLUDED_SENSORS) or ()),
-        *(global_options.get(CONF_EXCLUDED_SENSORS) or ()),
-        *excluded_devices,
-    ]
+    excluded_entities = (
+        collect_excluded_sensor_ids(
+            draft.get(CONF_EXCLUDED_SENSORS),
+            global_options,
+        )
+        | excluded_devices
+    )
     return discover_area_sensors(
         hass,
         draft[CONF_AREA_ID],
@@ -2276,10 +2277,10 @@ def _reconcile_sensor_key_selection(
     re_included: set[str] = set()
     explicit_ids: list[str] = []
     for entity_id in chosen:
-        if entity_id in excluded_set:
-            re_included.add(entity_id)
         if entity_id in excluded_devices:
             continue
+        if entity_id in excluded_set:
+            re_included.add(entity_id)
         if entity_id in previous_explicit or entity_id not in eligible:
             explicit_ids.append(entity_id)
 
@@ -2695,7 +2696,7 @@ def _create_global_sleep_schema(
 
 
 def _create_global_general_schema(
-    defaults: dict[str, Any],
+    defaults: Mapping[str, Any],
 ) -> vol.Schema:
     """Create schema for general integration-wide settings."""
     return vol.Schema(
@@ -3368,12 +3369,12 @@ class BaseOccupancyFlow(_FlowBase):
                 )
             area_id = flattened_input.get(CONF_AREA_ID, "")
             if not area_id:
-                errors[CONF_AREA_ID] = _ABORT_AREA_REQUIRED
+                errors[CONF_AREA_ID] = _ERROR_AREA_REQUIRED
             elif self.hass:
                 try:
                     _resolve_area_id_to_name(self.hass, area_id)
                 except ValueError:
-                    errors[CONF_AREA_ID] = _ABORT_AREA_NOT_FOUND
+                    errors[CONF_AREA_ID] = _ERROR_AREA_NOT_FOUND
 
             if not errors:
                 areas = self._get_wizard_areas()
@@ -3447,7 +3448,7 @@ class BaseOccupancyFlow(_FlowBase):
                 user_input, (CONF_MOTION_SENSORS,)
             )
             if not effective.get(CONF_MOTION_SENSORS):
-                errors[_ERROR_BASE] = _ABORT_MOTION_REQUIRED
+                errors[_ERROR_BASE] = _ERROR_MOTION_REQUIRED
 
             prob_true = flattened.get(
                 CONF_MOTION_PROB_GIVEN_TRUE, DEFAULT_MOTION_PROB_GIVEN_TRUE
@@ -4168,7 +4169,7 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
         if abort is not None or area_name is None:
             return abort or self.async_abort(reason=_ABORT_AREA_NOT_FOUND)
 
-        global_options = self._get_global_options()
+        global_options = dict(active_entry.options) if active_entry else {}
         discovered = discover_area_sensors(
             self.hass, area_id, global_options=global_options
         )
@@ -4250,9 +4251,7 @@ def _parse_purpose_decay_submission(
         seconds = duration_to_seconds(validated[key])
         if error := validate_decay_half_life(seconds):
             errors[key] = error
-        elif seconds != DEFAULT_DECAY_HALF_LIFE and seconds != int(
-            purpose_def.half_life
-        ):
+        elif not Purpose.is_purpose_half_life(seconds, key):
             overrides[key] = seconds
     return overrides, errors
 
@@ -4715,8 +4714,8 @@ class AreaOccupancyOptionsFlow(OptionsFlow, BaseOccupancyFlow):
             data_schema=self._schema_with_input(base_schema, user_input),
             errors=errors,
             description_placeholders={
-                f"{purpose_def.purpose.value}_default": _format_seconds(
-                    purpose_def.half_life
+                f"{purpose_def.purpose.value}{_PURPOSE_DEFAULT_PLACEHOLDER_SUFFIX}": (
+                    _format_seconds(purpose_def.half_life)
                 )
                 for purpose_def in PURPOSE_DEFINITIONS.values()
             },

@@ -15,9 +15,9 @@ from custom_components.area_occupancy.const import (
     CONF_AUTO_DISCOVER_SENSORS,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_LIGHT_POWER,
-    CONF_EXCLUDED_DEVICE_MATCHES,
     CONF_EXCLUDED_INTEGRATIONS,
     CONF_EXCLUDED_MANUFACTURERS,
+    CONF_EXCLUDED_MODELS,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
     CONF_MOTION_SENSORS,
@@ -37,7 +37,6 @@ from custom_components.area_occupancy.data.purpose import (
 )
 from custom_components.area_occupancy.discovery import (
     DISCOVERABLE_SENSOR_KEYS,
-    _is_light_power_sensor,
     area_discovery_unique_id,
     async_track_discovery,
     async_trigger_area_discoveries,
@@ -50,10 +49,15 @@ from custom_components.area_occupancy.discovery import (
 )
 from custom_components.area_occupancy.discovery_filters import (
     format_platform_source,
+    is_light_power_sensor,
     split_platform_source,
 )
 from homeassistant.config_entries import SOURCE_IGNORE, SOURCE_INTEGRATION_DISCOVERY
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.const import (
+    ATTR_MANUFACTURER,
+    ATTR_MODEL,
+    EVENT_HOMEASSISTANT_STARTED,
+)
 from homeassistant.helpers import area_registry as ar
 
 
@@ -136,7 +140,7 @@ def test_light_power_member_entities_set() -> None:
         original_device_class="power",
     )
 
-    assert _is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
+    assert is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
 
 
 def test_nested_light_power_groups_are_excluded() -> None:
@@ -162,7 +166,7 @@ def test_nested_light_power_groups_are_excluded() -> None:
         },
     )
 
-    assert _is_light_power_sensor(hass, "sensor.all_lights_power", registry=registry)
+    assert is_light_power_sensor(hass, "sensor.all_lights_power", registry=registry)
 
 
 def test_mixed_powercalc_group_is_not_light_power() -> None:
@@ -189,7 +193,7 @@ def test_mixed_powercalc_group_is_not_light_power() -> None:
         },
     )
 
-    assert not _is_light_power_sensor(
+    assert not is_light_power_sensor(
         hass, "sensor.light_group_power", registry=registry
     )
 
@@ -212,7 +216,7 @@ def test_cyclic_powercalc_groups_are_not_light_power() -> None:
         },
     )
 
-    assert not _is_light_power_sensor(
+    assert not is_light_power_sensor(
         hass, "sensor.first_group_power", registry=registry
     )
 
@@ -230,7 +234,7 @@ def test_light_power_source_entity_is_detected() -> None:
         original_device_class="power",
     )
 
-    assert _is_light_power_sensor(hass, "sensor.desk_lamp_power", entry=entry)
+    assert is_light_power_sensor(hass, "sensor.desk_lamp_power", entry=entry)
 
 
 @pytest.mark.parametrize(
@@ -258,7 +262,7 @@ def test_non_light_power_attributes_are_not_excluded(
         original_device_class="power",
     )
 
-    assert not _is_light_power_sensor(hass, entity_id, entry=entry)
+    assert not is_light_power_sensor(hass, entity_id, entry=entry)
 
 
 def test_non_sensor_entity_is_not_light_power() -> None:
@@ -268,7 +272,7 @@ def test_non_sensor_entity_is_not_light_power() -> None:
         attributes={"source_domain": "light"}
     )
 
-    assert not _is_light_power_sensor(hass, "light.ikea_lamp")
+    assert not is_light_power_sensor(hass, "light.ikea_lamp")
     hass.states.get.assert_not_called()
 
 
@@ -292,7 +296,7 @@ def test_light_source_requires_powercalc_entry(entry: SimpleNamespace | None) ->
     )
     registry = SimpleNamespace(entities={})
 
-    assert not _is_light_power_sensor(
+    assert not is_light_power_sensor(
         hass,
         "sensor.ikea_lamp_power",
         entry=entry,
@@ -316,7 +320,7 @@ def test_light_source_requires_power_device_class(
         original_device_class=device_class,
     )
 
-    assert not _is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
+    assert not is_light_power_sensor(hass, "sensor.ikea_lamp_power", entry=entry)
 
 
 @pytest.mark.parametrize(
@@ -858,19 +862,27 @@ def test_exclusions_apply_even_when_discovery_disabled() -> None:
 
 
 @pytest.mark.parametrize(
-    ("manufacturer", "model", "match"),
+    ("manufacturer", "model", "exclusion_key", "exclusion_value"),
     [
-        ("RATGDO", "V32 disco SecPlus V1", "ratgdo"),
-        ("LiftMaster", "v32disco_secplusv1", "secplusv1"),
+        ("RATGDO", "V32 disco SecPlus V1", CONF_EXCLUDED_MANUFACTURERS, "ratgdo"),
+        (
+            "LiftMaster",
+            "v32disco_secplusv1",
+            CONF_EXCLUDED_MODELS,
+            "v32disco_secplusv1",
+        ),
     ],
 )
-def test_area_device_match_exclusion_removes_saved_and_discovered_entities(
-    manufacturer: str, model: str, match: str
+def test_area_device_exclusion_removes_saved_and_discovered_entities(
+    manufacturer: str,
+    model: str,
+    exclusion_key: str,
+    exclusion_value: str,
 ) -> None:
-    """Area-level text matches filter device metadata case-insensitively."""
+    """Area-level manufacturer and model exclusions filter matching devices."""
     data = {
         CONF_AREA_ID: "room",
-        CONF_EXCLUDED_DEVICE_MATCHES: [match],
+        exclusion_key: [exclusion_value],
         "cover_sensors": ["cover.garage_door"],
     }
     ratgdo = entity(
@@ -903,8 +915,8 @@ def test_area_device_match_exclusion_removes_saved_and_discovered_entities(
     assert result["cover_sensors"] == ["cover.storage_door"]
 
 
-def test_global_device_match_exclusion_removes_saved_entities() -> None:
-    """Global manufacturer/model matches override manually selected sensors."""
+def test_global_device_model_exclusion_removes_saved_entities() -> None:
+    """Global manufacturer/model exclusions override manually selected sensors."""
     result = resolve(
         {
             CONF_AREA_ID: "room",
@@ -920,7 +932,7 @@ def test_global_device_match_exclusion_removes_saved_entities() -> None:
                 identifiers=set(),
             )
         },
-        global_options={CONF_EXCLUDED_DEVICE_MATCHES: ["secplus"]},
+        global_options={CONF_EXCLUDED_MODELS: ["v32disco_secplusv1"]},
     )
 
     assert result["cover_sensors"] == ["cover.storage_door"]
@@ -1078,15 +1090,9 @@ def test_build_suggested_area_config() -> None:
         icon="mdi:bed",
         aliases={"Sleeping Room"},
     )
-    with (
-        patch(
-            "custom_components.area_occupancy.discovery.ar.async_get",
-            return_value=area_reg,
-        ),
-        patch(
-            "custom_components.area_occupancy.discovery.discover_area_sensors",
-            return_value={CONF_MOTION_SENSORS: ["binary_sensor.bed_motion"]},
-        ),
+    with patch(
+        "custom_components.area_occupancy.discovery.ar.async_get",
+        return_value=area_reg,
     ):
         suggested = build_suggested_area_config(hass, "bedroom")
 
@@ -1403,7 +1409,8 @@ def test_expand_groups_disabled_uses_group_entity() -> None:
         ),
     ):
         resolved = resolve_area_sensors(
-            hass, {CONF_AREA_ID: "kitchen", CONF_EXPAND_GROUPS: False}
+            hass,
+            {CONF_AREA_ID: "kitchen", CONF_EXPAND_GROUPS: GroupExpansionMode.KEEP},
         )
 
     assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.kitchen_motion_group"]
@@ -1597,7 +1604,8 @@ def test_expand_groups_disabled_skips_group_containing_own_entity() -> None:
         ),
     ):
         resolved = resolve_area_sensors(
-            hass, {CONF_AREA_ID: "office", CONF_EXPAND_GROUPS: False}
+            hass,
+            {CONF_AREA_ID: "office", CONF_EXPAND_GROUPS: GroupExpansionMode.KEEP},
         )
 
     assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.clean_group"]
@@ -1708,7 +1716,7 @@ def test_auto_added_provenance_removed_but_explicit_selection_kept() -> None:
     data = {
         CONF_AREA_ID: "office",
         CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
-        CONF_EXPAND_GROUPS: False,
+        CONF_EXPAND_GROUPS: GroupExpansionMode.KEEP,
         CONF_AUTO_ADDED_SENSORS: {CONF_POWER_SENSORS: ["sensor.powercalc_auto"]},
         CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
     }
@@ -1913,7 +1921,7 @@ def test_excluded_group_entity_not_expanded() -> None:
             hass,
             {
                 CONF_AREA_ID: "hallway",
-                CONF_EXPAND_GROUPS: True,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
                 CONF_EXCLUDED_SENSORS: [excluded_group.entity_id],
             },
         )
@@ -2019,3 +2027,191 @@ def test_discovery_ssot_helpers() -> None:
             Mock(), {CONF_EXCLUDED_MANUFACTURERS: ["Acme"]}
         ) == {"sensor.x"}
     device_scan.assert_called_once()
+
+
+def test_is_light_power_sensor_falls_back_to_entity_registry() -> None:
+    """is_light_power_sensor resolves registry entries via er.async_get when omitted."""
+    entry = _reg_entry("sensor.lamp_power", area_id="office", device_class="power")
+    entry.platform = "powercalc"
+    hass, registry, _ = _make_group_hass(
+        entities=[entry],
+        states={"sensor.lamp_power": {"source_domain": "light"}},
+    )
+    with patch(
+        "custom_components.area_occupancy.discovery_filters.er.async_get",
+        return_value=registry,
+    ):
+        assert is_light_power_sensor(hass, "sensor.lamp_power")
+
+
+def test_diamond_dag_group_expansion_reaches_shared_leaf_from_all_branches() -> None:
+    """Path-scoped cycle detection still traverses shared nodes in a diamond DAG."""
+    root = _reg_entry("group.all_motion", area_id="office")
+    left = _reg_entry("group.left_motion")
+    right = _reg_entry("group.right_motion")
+    shared = _reg_entry("binary_sensor.shared_pir", device_class="motion")
+    right_only = _reg_entry("binary_sensor.right_pir", device_class="motion")
+    hass, registry, devices = _make_group_hass(
+        entities=[root, left, right, shared, right_only],
+        states={
+            "group.all_motion": {
+                "entity_id": ["group.left_motion", "group.right_motion"]
+            },
+            "group.left_motion": {"entity_id": ["binary_sensor.shared_pir"]},
+            "group.right_motion": {
+                "entity_id": ["binary_sensor.shared_pir", "binary_sensor.right_pir"]
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "office", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [
+        "binary_sensor.shared_pir",
+        "binary_sensor.right_pir",
+    ]
+
+
+def test_nested_disabled_or_excluded_group_members_are_not_expanded() -> None:
+    """Ineligible and excluded nested groups are skipped during expansion."""
+    outer = _reg_entry(
+        "binary_sensor.outer_motion", area_id="office", device_class="motion"
+    )
+    disabled_group = _reg_entry(
+        "binary_sensor.disabled_nested_group", device_class="motion"
+    )
+    disabled_group.disabled_by = "user"
+    excluded_group = _reg_entry(
+        "binary_sensor.excluded_nested_group", device_class="motion"
+    )
+    hidden_member = _reg_entry("binary_sensor.hidden_pir", device_class="motion")
+    excluded_member = _reg_entry("binary_sensor.excluded_pir", device_class="motion")
+    clean_member = _reg_entry("binary_sensor.clean_pir", device_class="motion")
+
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            outer,
+            disabled_group,
+            excluded_group,
+            hidden_member,
+            excluded_member,
+            clean_member,
+        ],
+        states={
+            "binary_sensor.outer_motion": {
+                "device_class": "motion",
+                "entity_id": [
+                    "binary_sensor.disabled_nested_group",
+                    "binary_sensor.excluded_nested_group",
+                    "binary_sensor.clean_pir",
+                ],
+            },
+            "binary_sensor.disabled_nested_group": {
+                "entity_id": ["binary_sensor.hidden_pir"]
+            },
+            "binary_sensor.excluded_nested_group": {
+                "entity_id": ["binary_sensor.excluded_pir"]
+            },
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_EXCLUDED_SENSORS: ["binary_sensor.excluded_nested_group"],
+            },
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.clean_pir"]
+
+
+def test_remote_lock_inside_group_is_excluded() -> None:
+    """Garage remote locks expanded from group.* entities are still filtered out."""
+    locks_group = _reg_entry("group.garage_locks", area_id="garage")
+    garage_cover = _reg_entry(
+        "cover.garagentor", area_id="garage", device_class="garage"
+    )
+    garage_cover.device_id = "ratgdo_dev"
+    remote_lock = _reg_entry("lock.fernbedienung_sperren")
+    remote_lock.device_id = "ratgdo_dev"
+    door_lock = _reg_entry("lock.side_door")
+
+    hass, registry, devices = _make_group_hass(
+        entities=[locks_group, garage_cover, remote_lock, door_lock],
+        states={
+            "group.garage_locks": {
+                "entity_id": ["lock.fernbedienung_sperren", "lock.side_door"]
+            }
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+            },
+        )
+
+    assert resolved["lock_sensors"] == ["lock.side_door"]
+
+
+def test_device_manufacturer_and_model_registry_updates_trigger_refresh() -> None:
+    """Device manufacturer/model changes schedule a debounced discovery refresh."""
+    hass, entry = Mock(), Mock()
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.iter_area_subentries",
+            return_value=[("id", {})],
+        ),
+        patch("custom_components.area_occupancy.discovery.async_call_later") as later,
+    ):
+        async_track_discovery(hass, entry, AsyncMock())
+        device_listener = hass.bus.async_listen.call_args_list[1].args[1]
+
+        device_listener(
+            SimpleNamespace(data={"action": "update", "changes": {"name": "old"}})
+        )
+        later.assert_not_called()
+
+        device_listener(
+            SimpleNamespace(
+                data={"action": "update", "changes": {ATTR_MANUFACTURER: "old"}}
+            )
+        )
+        device_listener(
+            SimpleNamespace(data={"action": "update", "changes": {ATTR_MODEL: "old"}})
+        )
+        assert later.call_count == 2

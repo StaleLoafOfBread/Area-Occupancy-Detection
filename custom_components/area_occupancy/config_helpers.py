@@ -100,7 +100,6 @@ from .const import (
     DEFAULT_WEIGHT_WINDOW,
     DEFAULT_WINDOW_ACTIVE_STATE,
     DURATION_FIELDS,
-    GROUP_EXPANSION_SETTING_LABEL,
     SLEEP_PRESENCE_HALF_LIFE,
     SUBENTRY_TYPE_AREA,
     ExclusionMode,
@@ -109,6 +108,7 @@ from .const import (
 
 _ModeT = TypeVar("_ModeT", bound=StrEnum)
 _DEFAULT_EXCLUSION_SETTING_LABEL: Final = "exclusion"
+_GROUP_EXPANSION_SETTING_LABEL: Final = "group-expansion"
 
 # ── Shared bounds ────────────────────────────────────────────────────
 # One definition for the UI selectors, the server-side validator and the
@@ -564,6 +564,17 @@ def parse_global_sleep_decay_half_life(options: Mapping[str, Any] | None) -> int
     return parsed if parsed is not None else SLEEP_PRESENCE_HALF_LIFE
 
 
+def _parse_positive_int_mapping(raw: Mapping[Any, Any]) -> dict[str, int]:
+    """Return validated positive integer values keyed by string."""
+    parsed: dict[str, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        if (seconds := parse_positive_int(value)) is not None:
+            parsed[key] = seconds
+    return parsed
+
+
 def parse_global_purpose_decay_half_lives(
     options: Mapping[str, Any] | None,
 ) -> dict[str, int]:
@@ -573,13 +584,7 @@ def parse_global_purpose_decay_half_lives(
     raw = options.get(CONF_PURPOSE_DECAY_HALF_LIVES)
     if not isinstance(raw, Mapping):
         return {}
-    overrides: dict[str, int] = {}
-    for purpose_key, half_life in cast("Mapping[Any, Any]", raw).items():
-        if not isinstance(purpose_key, str):
-            continue
-        if (seconds := parse_positive_int(half_life)) is not None:
-            overrides[purpose_key] = seconds
-    return overrides
+    return _parse_positive_int_mapping(cast("Mapping[Any, Any]", raw))
 
 
 def get_purpose_decay_overrides(coordinator: Any) -> dict[str, int] | None:
@@ -588,11 +593,7 @@ def get_purpose_decay_overrides(coordinator: Any) -> dict[str, int] | None:
     overrides = getattr(integration_config, "purpose_decay_half_lives", None)
     if not isinstance(overrides, Mapping):
         return None
-    return {
-        k: v
-        for k, v in cast("Mapping[Any, Any]", overrides).items()
-        if isinstance(k, str) and isinstance(v, int)
-    }
+    return _parse_positive_int_mapping(cast("Mapping[Any, Any]", overrides))
 
 
 def get_global_sleep_decay_half_life(coordinator: Any) -> int:
@@ -630,15 +631,9 @@ def _normalize_tri_state_mode(
     value: Any,
     enum_cls: type[_ModeT],
     *,
-    true_mode: _ModeT,
-    false_mode: _ModeT,
     default: _ModeT,
 ) -> _ModeT:
-    """Normalize a legacy boolean or enum string into ``enum_cls``."""
-    if value is True:
-        return true_mode
-    if value is False:
-        return false_mode
+    """Normalize a stored enum string into ``enum_cls``."""
     if isinstance(value, str):
         try:
             return enum_cls(value)
@@ -648,26 +643,25 @@ def _normalize_tri_state_mode(
 
 
 def _resolve_tri_state_enabled(
-    area_setting: bool | str,
+    area_setting: str,
     global_setting: Any,
     *,
     enable_mode: StrEnum,
     disable_mode: StrEnum,
     follow_mode: StrEnum,
     setting_name: str,
-    require_bool_global: bool = False,
 ) -> bool:
     """Resolve a tri-state area override against a global boolean default."""
-    if area_setting is True or area_setting == enable_mode:
+    if area_setting == enable_mode:
         return True
-    if area_setting is False or area_setting == disable_mode:
+    if area_setting == disable_mode:
         return False
     if area_setting == follow_mode:
-        if require_bool_global and not isinstance(global_setting, bool):
+        if not isinstance(global_setting, bool):
             raise ValueError(
                 f"Invalid global {setting_name} setting: {global_setting!r}"
             )
-        return bool(global_setting)
+        return global_setting
     raise ValueError(f"Invalid {setting_name} setting: {area_setting!r}")
 
 
@@ -675,20 +669,13 @@ def normalize_exclusion_mode(
     value: Any,
     *,
     default: ExclusionMode = DEFAULT_AREA_EXCLUSION_SETTING,
-    legacy_false: ExclusionMode = ExclusionMode.INCLUDE,
 ) -> ExclusionMode:
-    """Normalize a stored exclusion setting (legacy bool or enum string) to ``ExclusionMode``."""
-    return _normalize_tri_state_mode(
-        value,
-        ExclusionMode,
-        true_mode=ExclusionMode.EXCLUDE,
-        false_mode=legacy_false,
-        default=default,
-    )
+    """Normalize a stored exclusion setting to ``ExclusionMode``."""
+    return _normalize_tri_state_mode(value, ExclusionMode, default=default)
 
 
 def resolve_exclusion_enabled(
-    area_setting: bool | str,
+    area_setting: str,
     global_setting: Any,
     *,
     setting_name: str = _DEFAULT_EXCLUSION_SETTING_LABEL,
@@ -701,7 +688,6 @@ def resolve_exclusion_enabled(
         disable_mode=ExclusionMode.INCLUDE,
         follow_mode=ExclusionMode.FOLLOW_GLOBAL,
         setting_name=setting_name,
-        require_bool_global=False,
     )
 
 
@@ -710,19 +696,11 @@ def normalize_group_expansion_mode(
     *,
     default: GroupExpansionMode = DEFAULT_AREA_EXPAND_GROUPS,
 ) -> GroupExpansionMode:
-    """Normalize a stored group-expansion setting (legacy bool or enum string) to ``GroupExpansionMode``."""
-    return _normalize_tri_state_mode(
-        value,
-        GroupExpansionMode,
-        true_mode=GroupExpansionMode.EXPAND,
-        false_mode=GroupExpansionMode.KEEP,
-        default=default,
-    )
+    """Normalize a stored group-expansion setting to ``GroupExpansionMode``."""
+    return _normalize_tri_state_mode(value, GroupExpansionMode, default=default)
 
 
-def resolve_group_expansion_enabled(
-    area_setting: bool | str, global_setting: Any
-) -> bool:
+def resolve_group_expansion_enabled(area_setting: str, global_setting: Any) -> bool:
     """Resolve an area group-expansion override against the global boolean default."""
     return _resolve_tri_state_enabled(
         area_setting,
@@ -730,8 +708,7 @@ def resolve_group_expansion_enabled(
         enable_mode=GroupExpansionMode.EXPAND,
         disable_mode=GroupExpansionMode.KEEP,
         follow_mode=GroupExpansionMode.FOLLOW_GLOBAL,
-        setting_name=GROUP_EXPANSION_SETTING_LABEL,
-        require_bool_global=True,
+        setting_name=_GROUP_EXPANSION_SETTING_LABEL,
     )
 
 

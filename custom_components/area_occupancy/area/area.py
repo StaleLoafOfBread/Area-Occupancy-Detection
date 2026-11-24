@@ -437,12 +437,12 @@ class Area:
             return None
 
         current = dt_util.utcnow() if now is None else to_utc(now)
-        threshold = self.config.threshold
-        if self._probability_at(current) < threshold:
-            return None
-
         expiry = self._decay_expiry_ceiling(current)
         if expiry is None:
+            return None
+
+        threshold = self.config.threshold
+        if self._probability_at(current) < threshold:
             return None
 
         # Step past the 5% cutoff so all decaying factors are guaranteed to be 0.0.

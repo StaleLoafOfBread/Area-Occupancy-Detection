@@ -30,7 +30,7 @@ INTEGRATION_TITLE: Final = "Area Occupancy Detection"
 DEFAULT_LANGUAGE: Final = "en"
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SENSOR]
 
-# Bundled Lovelace card, served by the integration itself (see async_setup).
+# Bundled Lovelace frontend assets, served by the integration itself (see async_setup).
 # The URL carries the integration version as a cache-busting query string, so
 # every release is a new cache key despite the long-lived cache headers.
 FRONTEND_DIR: Final = "frontend"
@@ -99,7 +99,6 @@ CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
 CONF_AUTO_DISCOVER_DOMAINS: Final = "auto_discover_domains"
 CONF_AUTO_ADDED_SENSORS: Final = "auto_added_sensors"
 CONF_EXCLUDED_INTEGRATIONS: Final = "excluded_integrations"
-CONF_EXCLUDED_DEVICE_MATCHES: Final = "excluded_device_matches"
 CONF_EXCLUDED_MANUFACTURERS: Final = "excluded_manufacturers"
 CONF_EXCLUDED_MODELS: Final = "excluded_models"
 CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
@@ -212,13 +211,6 @@ CONF_WEIGHT_WASP: Final = "weight_wasp"
 # Default values
 DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
 DEFAULT_AREA_EXCLUSION_SETTING: Final = ExclusionMode.FOLLOW_GLOBAL
-DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER: Final[bool] = True
-DEFAULT_GLOBAL_EXCLUDE_OCCUPANCY_SUBZONES: Final[bool] = True
-DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS: Final[bool] = True
-DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED: Final[bool] = True
-DEVICE_ATTR_MANUFACTURER: Final = "manufacturer"
-DEVICE_ATTR_MODEL: Final = "model"
-GROUP_EXPANSION_SETTING_LABEL: Final = "group-expansion"
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,25 +226,25 @@ class DiscoveryExclusionRule:
 DISCOVERY_EXCLUSION_RULES: Final[tuple[DiscoveryExclusionRule, ...]] = (
     DiscoveryExclusionRule(
         config_key=CONF_EXCLUDE_LIGHT_POWER,
-        global_default=DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+        global_default=True,
         translation_key="light_power_exclusion",
         setting_label="light-power exclusion",
     ),
     DiscoveryExclusionRule(
         config_key=CONF_EXCLUDE_OCCUPANCY_SUBZONES,
-        global_default=DEFAULT_GLOBAL_EXCLUDE_OCCUPANCY_SUBZONES,
+        global_default=True,
         translation_key="occupancy_subzone_exclusion",
         setting_label="occupancy-subzone exclusion",
     ),
     DiscoveryExclusionRule(
         config_key=CONF_EXCLUDE_REMOTE_LOCKS,
-        global_default=DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS,
+        global_default=True,
         translation_key="remote_lock_exclusion",
         setting_label="remote-lock exclusion",
     ),
     DiscoveryExclusionRule(
         config_key=CONF_EXCLUDE_VEHICLE_DETECTED,
-        global_default=DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED,
+        global_default=True,
         translation_key="vehicle_detected_exclusion",
         setting_label="vehicle-detected exclusion",
     ),
@@ -261,7 +253,6 @@ DISCOVERY_EXCLUSION_RULES_BY_KEY: Final[dict[str, DiscoveryExclusionRule]] = {
     rule.config_key: rule for rule in DISCOVERY_EXCLUSION_RULES
 }
 
-DEFAULT_EXCLUDED_DEVICE_MATCHES: Final[tuple[str, ...]] = ()
 DEFAULT_EXCLUDED_MANUFACTURERS: Final[tuple[str, ...]] = ()
 DEFAULT_EXCLUDED_MODELS: Final[tuple[str, ...]] = ()
 DEFAULT_GLOBAL_EXPAND_GROUPS: Final[bool] = True
@@ -682,7 +673,6 @@ ATTR_PERSON_SLEEPING: Final = "sleeping"
 # Probability sensor diagnostic attributes
 ATTR_ACTIVE_ENTITIES: Final = "active_entities"
 ATTR_DECAYING_ENTITIES: Final = "decaying_entities"
-ATTR_DECAYING_HALF_LIVES: Final = "decaying_half_lives"
 ATTR_DECAYING_EXPIRES_AT: Final = "decaying_expires_at"
 ATTR_DECAY_CLEAR_AT: Final = "decay_clear_at"
 ATTR_ADJACENT_AREAS: Final = "adjacent_areas"
@@ -874,6 +864,7 @@ SENSOR_KEY_TO_TYPE_SLUG: Final[dict[str, str]] = {
 TYPE_SLUG_TO_SENSOR_KEY: Final[dict[str, str]] = {
     slug: key for key, slug in SENSOR_KEY_TO_TYPE_SLUG.items()
 }
+ALL_AREA_SENSOR_KEYS: Final[tuple[str, ...]] = tuple(SENSOR_KEY_TO_TYPE_SLUG)
 
 # Sensor type string -> InputType mapping (alphabetized).
 # Lazy-loaded to avoid circular imports with data.entity_type.

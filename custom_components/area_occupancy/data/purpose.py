@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import json
 import logging
+import math
 from pathlib import Path
 import re
 from typing import Any, Final, cast
@@ -262,8 +263,13 @@ def get_purpose_options() -> list[dict[str, str]]:
 
 
 def _parse_positive_half_life(value: Any) -> float | None:
-    """Return a positive float half-life override, or ``None`` if invalid."""
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    """Return a positive finite float half-life override, or ``None`` if invalid."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    ):
         return float(value)
     return None
 
@@ -558,11 +564,6 @@ def get_purpose_keywords(
     if (fallback := _PURPOSE_LEXICONS.get(_DEFAULT_LEXICON_LOCALE)) is not None:
         return fallback.raw_keywords
     return ()
-
-
-PURPOSE_NAME_KEYWORDS: Final[tuple[tuple[AreaPurpose, tuple[str, ...]], ...]] = (
-    get_purpose_keywords(_DEFAULT_LEXICON_LOCALE)
-)
 
 
 def _match_lexicon(
