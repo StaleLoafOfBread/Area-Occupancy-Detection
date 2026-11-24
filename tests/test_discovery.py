@@ -2188,6 +2188,268 @@ def test_remote_lock_inside_group_is_excluded() -> None:
     assert resolved["lock_sensors"] == ["lock.side_door"]
 
 
+def test_expand_groups_keeps_reclassified_occupancy_group_wrapping_problem_members() -> (
+    None
+):
+    """A reclassified occupancy group wrapping problem members stays intact."""
+    group = _reg_entry(
+        "binary_sensor.someone_obstructing_a_garage_door",
+        area_id="garage",
+        device_class="occupancy",
+    )
+    group.platform = "group"
+    beam_kate = _reg_entry(
+        "binary_sensor.ratgdo_kate_obstruction", device_class="problem"
+    )
+    beam_andrew = _reg_entry(
+        "binary_sensor.ratgdo_andrew_obstruction", device_class="problem"
+    )
+    hass, registry, devices = _make_group_hass(
+        entities=[group, beam_kate, beam_andrew],
+        states={
+            "binary_sensor.someone_obstructing_a_garage_door": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.ratgdo_kate_obstruction",
+                    "binary_sensor.ratgdo_andrew_obstruction",
+                ],
+            },
+            "binary_sensor.ratgdo_kate_obstruction": {"device_class": "problem"},
+            "binary_sensor.ratgdo_andrew_obstruction": {"device_class": "problem"},
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [
+        "binary_sensor.someone_obstructing_a_garage_door"
+    ]
+
+
+def test_expand_groups_keeps_occupancy_group_wrapping_door_members() -> None:
+    """An occupancy group wrapping door members keeps the group and leaves doors separate."""
+    group = _reg_entry(
+        "binary_sensor.entry_occupancy",
+        area_id="hall",
+        device_class="occupancy",
+    )
+    front_door = _reg_entry(
+        "binary_sensor.front_door", area_id="hall", device_class="door"
+    )
+    side_door = _reg_entry(
+        "binary_sensor.side_door", area_id="hall", device_class="door"
+    )
+    hass, registry, devices = _make_group_hass(
+        entities=[group, front_door, side_door],
+        states={
+            "binary_sensor.entry_occupancy": {
+                "device_class": "occupancy",
+                "entity_id": ["binary_sensor.front_door", "binary_sensor.side_door"],
+            },
+            "binary_sensor.front_door": {"device_class": "door"},
+            "binary_sensor.side_door": {"device_class": "door"},
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "hall", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.entry_occupancy"]
+    assert resolved[CONF_DOOR_SENSORS] == [
+        "binary_sensor.front_door",
+        "binary_sensor.side_door",
+    ]
+
+
+def test_expand_groups_keeps_mixed_occupancy_group() -> None:
+    """A mixed group with motion and problem members keeps the group entity."""
+    group = _reg_entry(
+        "binary_sensor.garage_occupancy_group",
+        area_id="garage",
+        device_class="occupancy",
+    )
+    pir = _reg_entry("binary_sensor.garage_pir", device_class="motion")
+    beam = _reg_entry("binary_sensor.garage_beam", device_class="problem")
+    hass, registry, devices = _make_group_hass(
+        entities=[group, pir, beam],
+        states={
+            "binary_sensor.garage_occupancy_group": {
+                "device_class": "occupancy",
+                "entity_id": ["binary_sensor.garage_pir", "binary_sensor.garage_beam"],
+            },
+            "binary_sensor.garage_pir": {"device_class": "motion"},
+            "binary_sensor.garage_beam": {"device_class": "problem"},
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.garage_occupancy_group"]
+
+
+def test_expand_groups_skips_non_discoverable_typed_group() -> None:
+    """A safety or problem group wrapping door/motion sensors does not leak members."""
+    safety_group = _reg_entry(
+        "binary_sensor.house_safety_alert",
+        area_id="hall",
+        device_class="safety",
+    )
+    foreign_door = _reg_entry("binary_sensor.attic_door", device_class="door")
+    foreign_pir = _reg_entry("binary_sensor.basement_pir", device_class="motion")
+    hass, registry, devices = _make_group_hass(
+        entities=[safety_group, foreign_door, foreign_pir],
+        states={
+            "binary_sensor.house_safety_alert": {
+                "device_class": "safety",
+                "entity_id": [
+                    "binary_sensor.attic_door",
+                    "binary_sensor.basement_pir",
+                ],
+            },
+            "binary_sensor.attic_door": {"device_class": "door"},
+            "binary_sensor.basement_pir": {"device_class": "motion"},
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "hall", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert CONF_MOTION_SENSORS not in resolved
+    assert CONF_DOOR_SENSORS not in resolved
+
+
+def test_expand_groups_skips_mismatched_group_containing_own_entity() -> None:
+    """A mismatched group containing an own entity is neither expanded nor kept."""
+    own_entry = _reg_entry(
+        "binary_sensor.garage_occupancy_status", device_class="occupancy"
+    )
+    own_entry.platform = "area_occupancy"
+    group = _reg_entry(
+        "binary_sensor.garage_composite",
+        area_id="garage",
+        device_class="occupancy",
+    )
+    beam = _reg_entry("binary_sensor.garage_beam", device_class="problem")
+    hass, registry, devices = _make_group_hass(
+        entities=[group, own_entry, beam],
+        states={
+            "binary_sensor.garage_composite": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.garage_occupancy_status",
+                    "binary_sensor.garage_beam",
+                ],
+            },
+            "binary_sensor.garage_beam": {"device_class": "problem"},
+        },
+    )
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert CONF_MOTION_SENSORS not in resolved
+
+
+def test_expand_groups_manual_keeps_mismatched_group() -> None:
+    """Manual occupancy groups wrapping problem members stay unexpanded."""
+    beam_kate = _reg_entry(
+        "binary_sensor.ratgdo_kate_obstruction", device_class="problem"
+    )
+    beam_andrew = _reg_entry(
+        "binary_sensor.ratgdo_andrew_obstruction", device_class="problem"
+    )
+    hass, registry, _ = _make_group_hass(
+        entities=[beam_kate, beam_andrew],
+        states={
+            "binary_sensor.someone_obstructing_a_garage_door": {
+                "device_class": "occupancy",
+                "entity_id": [
+                    "binary_sensor.ratgdo_kate_obstruction",
+                    "binary_sensor.ratgdo_andrew_obstruction",
+                ],
+            },
+            "binary_sensor.ratgdo_kate_obstruction": {"device_class": "problem"},
+            "binary_sensor.ratgdo_andrew_obstruction": {"device_class": "problem"},
+        },
+    )
+    with patch(
+        "custom_components.area_occupancy.discovery.er.async_get",
+        return_value=registry,
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [
+                    "binary_sensor.someone_obstructing_a_garage_door"
+                ],
+            },
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [
+        "binary_sensor.someone_obstructing_a_garage_door"
+    ]
+
+
 def test_device_manufacturer_and_model_registry_updates_trigger_refresh() -> None:
     """Device manufacturer/model changes schedule a debounced discovery refresh."""
     hass, entry = Mock(), Mock()

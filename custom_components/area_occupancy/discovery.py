@@ -669,18 +669,70 @@ def _build_area_scan_context(
     )
 
 
+def _member_matches_group_classification(
+    hass: HomeAssistant,
+    member_id: str,
+    *,
+    member_entry: er.RegistryEntry | None,
+    expected_domain: str,
+    expected_key: str,
+) -> bool:
+    """Return True if a member's own classification matches the enclosing group."""
+    if member_entry is not None:
+        member_domain = member_entry.domain
+        member_dc = resolve_entry_device_class(hass, member_entry, member_id)
+    else:
+        state, attrs = entity_state_and_attributes(hass, member_id)
+        if state is None:
+            return True
+        member_domain = entity_domain(member_id)
+        member_dc = resolve_entry_device_class(hass, None, member_id, attrs=attrs)
+
+    if member_dc is None:
+        return member_domain == expected_domain
+    return _map_sensor_key(member_domain, member_dc) == expected_key
+
+
+def _is_eligible_expanded_member(
+    hass: HomeAssistant,
+    member_id: str,
+    member_entry: er.RegistryEntry | None,
+    scan_ctx: _AreaScanContext,
+) -> bool:
+    """Return True if an expanded group member is eligible for area discovery."""
+    if member_entry is not None:
+        return not is_ineligible_entry(
+            hass, member_entry, scan_ctx.filters.excluded_platforms
+        ) and not is_special_excluded_entry(
+            hass, member_entry, scan_ctx.special_exclusions
+        )
+    if is_weather_entity(member_id, None):
+        return False
+    state, _ = entity_state_and_attributes(hass, member_id)
+    return state is not None
+
+
 def _expand_and_collect_group(
     hass: HomeAssistant,
     registry: er.EntityRegistry,
     entry: er.RegistryEntry,
     scan_ctx: _AreaScanContext,
     discovered: dict[str, list[str]],
-) -> None:
-    """Expand a group registry entry and append eligible member entities."""
+) -> bool:
+    """Expand a group registry entry when its members match its classification.
+
+    Returns ``True`` if the group was expanded (or skipped as a non-discoverable
+    typed group only via fallback), or ``False`` when the caller should fall
+    through to evaluate the group entity itself.
+    """
     filters = scan_ctx.filters
     required_domain = entry.domain if entry.domain != GROUP_DOMAIN else None
     group_dc = resolve_entry_device_class(hass, entry)
-    exclude_light_power = filters.is_excluded(CONF_EXCLUDE_LIGHT_POWER)
+    group_key = _map_sensor_key(entry.domain, group_dc)
+    if entry.domain != GROUP_DOMAIN and group_dc is not None and group_key is None:
+        return False
+
+    eligible_members: list[tuple[str, er.RegistryEntry | None]] = []
     for member_id in _expand_group_entity(
         hass,
         entry.entity_id,
@@ -690,10 +742,28 @@ def _expand_and_collect_group(
         excluded_platforms=filters.excluded_platforms,
     ):
         member_entry = lookup_registry_entry(member_id, registry, hass=hass)
-        if member_entry is not None and is_special_excluded_entry(
-            hass, member_entry, scan_ctx.special_exclusions
-        ):
-            continue
+        if _is_eligible_expanded_member(hass, member_id, member_entry, scan_ctx):
+            eligible_members.append((member_id, member_entry))
+
+    if (
+        entry.domain != GROUP_DOMAIN
+        and group_dc is not None
+        and group_key is not None
+        and any(
+            not _member_matches_group_classification(
+                hass,
+                member_id,
+                member_entry=member_entry,
+                expected_domain=entry.domain,
+                expected_key=group_key,
+            )
+            for member_id, member_entry in eligible_members
+        )
+    ):
+        return False
+
+    exclude_light_power = filters.is_excluded(CONF_EXCLUDE_LIGHT_POWER)
+    for member_id, member_entry in eligible_members:
         key = _classify_entity(
             hass,
             registry,
@@ -703,8 +773,10 @@ def _expand_and_collect_group(
             fallback_device_class=group_dc,
             excluded_platforms=filters.excluded_platforms,
             exclude_light_power=exclude_light_power,
+            check_eligibility=False,
         )
         _append_discovered(discovered, filters, key, member_id)
+    return True
 
 
 def _discover_entry_sensors(
@@ -724,8 +796,11 @@ def _discover_entry_sensors(
         return
 
     is_group = _get_group_members(hass, entry.entity_id) is not None
-    if filters.expand_groups and is_group:
-        _expand_and_collect_group(hass, registry, entry, scan_ctx, discovered)
+    if (
+        filters.expand_groups
+        and is_group
+        and _expand_and_collect_group(hass, registry, entry, scan_ctx, discovered)
+    ):
         return
 
     if is_group and _group_contains_own_entity(hass, entry.entity_id, registry):
@@ -894,15 +969,29 @@ def _expand_manual_groups(
             if not isinstance(entity_id, str) or entity_id in excluded:
                 continue
             if _get_group_members(hass, entity_id) is not None:
-                expanded.extend(
-                    _expand_group_entity(
-                        hass,
-                        entity_id,
-                        required_domain=expected_domain,
-                        registry=registry,
-                        excluded_entity_ids=excluded,
-                    )
+                member_ids = _expand_group_entity(
+                    hass,
+                    entity_id,
+                    required_domain=expected_domain,
+                    registry=registry,
+                    excluded_entity_ids=excluded,
                 )
+                if expected_domain is not None and any(
+                    not _member_matches_group_classification(
+                        hass,
+                        member_id,
+                        member_entry=lookup_registry_entry(
+                            member_id, registry, hass=hass
+                        ),
+                        expected_domain=expected_domain,
+                        expected_key=key,
+                    )
+                    for member_id in member_ids
+                ):
+                    if not _group_contains_own_entity(hass, entity_id, registry):
+                        expanded.append(entity_id)
+                else:
+                    expanded.extend(member_ids)
             else:
                 expanded.append(entity_id)
         resolved[key] = list(dict.fromkeys(expanded))
