@@ -1,5 +1,6 @@
 """Tests for Area class methods."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 import pytest
@@ -14,6 +15,8 @@ from custom_components.area_occupancy.const import (
 )
 from custom_components.area_occupancy.coordinator import AreaOccupancyCoordinator
 from custom_components.area_occupancy.data.activity import ActivityId
+from custom_components.area_occupancy.data.decay import Decay
+from custom_components.area_occupancy.data.door_hold import DoorHold, DoorHoldState
 from custom_components.area_occupancy.data.entity_type import DEFAULT_TYPES, InputType
 from custom_components.area_occupancy.data.purpose import AreaPurpose
 
@@ -601,3 +604,158 @@ class TestTwoPhaseActivityBoost:
 
         result = default_area.detected_activity()
         assert result.activity_id == ActivityId.UNOCCUPIED
+
+
+class TestAreaDecayClearAt:
+    """Tests for Area.decay_clear_at() projected clearing time."""
+
+    @staticmethod
+    def _make_motion_entity(
+        entity_id: str,
+        *,
+        decay_start: datetime,
+        half_life: float = 90.0,
+        evidence: bool = False,
+        is_decaying: bool = True,
+    ) -> Mock:
+        entity = Mock()
+        entity.entity_id = entity_id
+        entity.evidence = evidence
+        entity.is_stuck = False
+        entity.prob_given_true = 0.95
+        entity.prob_given_false = 0.005
+        entity.decay = Decay(
+            half_life=half_life,
+            is_decaying=is_decaying,
+            decay_start=decay_start,
+        )
+        type(entity).decay_factor = PropertyMock(
+            side_effect=lambda: entity.decay.decay_factor
+        )
+        type(entity).weight = PropertyMock(return_value=1.0)
+        entity.effective_weight = 0.9
+        entity.type = Mock()
+        entity.type.input_type = InputType.MOTION
+        entity.type.strength_multiplier = 3.0
+        return entity
+
+    def test_single_motion_clamped_99_clears_at_one_half_life(
+        self, default_area: Area
+    ) -> None:
+        """A single motion sensor at 90% threshold clears at 1 half-life even when clamped at 99%."""
+        now = datetime(2026, 11, 21, 23, 0, 0, tzinfo=UTC)
+        default_area.config.threshold = 0.90
+        default_area.config.decay.enabled = True
+        default_area.prior.global_prior = 0.087
+        default_area.prior._cached_time_prior = None
+        default_area.entities._entities = {
+            "binary_sensor.motion_1": self._make_motion_entity(
+                "binary_sensor.motion_1", decay_start=now, half_life=90.0
+            )
+        }
+
+        clear_at = default_area.decay_clear_at(now=now)
+        assert clear_at is not None
+        assert abs((clear_at - (now + timedelta(seconds=90))).total_seconds()) <= 1.0
+
+    def test_two_motion_sensors_with_future_decay_delay_laundry_scenario(
+        self, default_area: Area
+    ) -> None:
+        """Two decaying motion sensors with PIR decay_delay project delay + 2 half-lives."""
+        now = datetime(2026, 11, 21, 23, 0, 0, tzinfo=UTC)
+        delay_seconds = 180.0
+        half_life = 90.0
+        decay_start = now + timedelta(seconds=delay_seconds)
+
+        default_area.config.threshold = 0.90
+        default_area.config.decay.enabled = True
+        default_area.prior.global_prior = 0.087
+        default_area.prior._cached_time_prior = None
+        default_area.entities._entities = {
+            "binary_sensor.motion_1": self._make_motion_entity(
+                "binary_sensor.motion_1", decay_start=decay_start, half_life=half_life
+            ),
+            "binary_sensor.motion_2": self._make_motion_entity(
+                "binary_sensor.motion_2", decay_start=decay_start, half_life=half_life
+            ),
+        }
+
+        # With 2 identical motion sensors, each contributes hold * factor, so
+        # combined contribution crosses threshold when factor = 0.25 (2 half-lives).
+        expected = now + timedelta(seconds=delay_seconds + 2 * half_life)
+        clear_at_t0 = default_area.decay_clear_at(now=now)
+        clear_at_t60 = default_area.decay_clear_at(now=now + timedelta(seconds=60))
+
+        assert clear_at_t0 is not None
+        assert clear_at_t60 is not None
+        assert abs((clear_at_t0 - expected).total_seconds()) <= 1.0
+        # Target timestamp stays stable across ticks during the delay window.
+        assert abs((clear_at_t60 - clear_at_t0).total_seconds()) <= 1.0
+
+    def test_returns_none_when_decay_disabled_or_unoccupied_or_held(
+        self, default_area: Area
+    ) -> None:
+        """Returns None when decay cannot clear occupancy."""
+        now = datetime(2026, 11, 21, 23, 0, 0, tzinfo=UTC)
+        default_area.config.threshold = 0.90
+        default_area.prior.global_prior = 0.087
+        default_area.prior._cached_time_prior = None
+        decaying_sensor = self._make_motion_entity(
+            "binary_sensor.motion_1", decay_start=now, half_life=90.0
+        )
+        default_area.entities._entities = {"binary_sensor.motion_1": decaying_sensor}
+
+        # Decay disabled
+        default_area.config.decay.enabled = False
+        assert default_area.decay_clear_at(now=now) is None
+        default_area.config.decay.enabled = True
+
+        # Active live sensor keeps occupancy above threshold after decaying sensor ends
+        active_sensor = self._make_motion_entity(
+            "binary_sensor.motion_live",
+            decay_start=now,
+            half_life=90.0,
+            evidence=True,
+            is_decaying=False,
+        )
+        default_area.entities._entities["binary_sensor.motion_live"] = active_sensor
+        assert default_area.decay_clear_at(now=now) is None
+
+        # Unoccupied area
+        default_area.entities._entities = {}
+        assert default_area.decay_clear_at(now=now) is None
+
+    def test_door_hold_held_returns_none_and_fading_projects_clear_time(
+        self, default_area: Area
+    ) -> None:
+        """Active closed-door hold returns None; fading door hold returns projected clear time."""
+        now = datetime(2026, 11, 21, 23, 0, 0, tzinfo=UTC)
+        default_area.config.threshold = 0.50
+        default_area.config.decay.enabled = True
+        default_area.config.decay.half_life = 60.0
+        default_area.config.closed_door_hold = True
+        default_area.prior.global_prior = 0.10
+        default_area.prior._cached_time_prior = None
+        default_area.entities._entities = {
+            "binary_sensor.motion_1": self._make_motion_entity(
+                "binary_sensor.motion_1",
+                decay_start=now,
+                half_life=60.0,
+                evidence=False,
+                is_decaying=False,
+            )
+        }
+
+        # Actively held: never clears by decay alone.
+        held = DoorHold(DoorHoldState(held_from=now))
+        with patch.object(default_area.coordinator, "door_hold_for", return_value=held):
+            assert default_area.decay_clear_at(now=now) is None
+
+        # Fading door hold: projects exact crossing time even with no decaying entities.
+        fading = DoorHold(DoorHoldState(fade_from=now))
+        with patch.object(
+            default_area.coordinator, "door_hold_for", return_value=fading
+        ):
+            clear_at = default_area.decay_clear_at(now=now)
+            assert clear_at is not None
+            assert now < clear_at < now + timedelta(seconds=360)

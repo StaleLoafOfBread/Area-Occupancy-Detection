@@ -7,6 +7,7 @@ import pytest
 from custom_components.area_occupancy.config_flow import _closed_door_hold_default
 from custom_components.area_occupancy.coordinator import AreaOccupancyCoordinator
 from custom_components.area_occupancy.data.door_hold import (
+    FADE_HALF_LIVES,
     DoorHold,
     DoorHoldState,
     hold_logit,
@@ -314,6 +315,61 @@ class TestState:
 
     def test_malformed_falls_back_to_empty(self) -> None:
         assert DoorHoldState.from_dict({"held_from": "nonsense"}) == DoorHoldState()
+
+
+class TestDoorHoldFadeExpiry:
+    """Fade expiry helpers report exact timestamps and clear floor_logit at expiry."""
+
+    def test_fade_expires_at_only_when_fading(self) -> None:
+        hold = DoorHold()
+        assert hold.fade_expires_at(fade_half_life=60.0) is None
+
+        held = DoorHold(
+            DoorHoldState(
+                held_from=None,
+                doors_open=False,
+                fade_from=datetime(2026, 1, 1, 12, 5, tzinfo=UTC),
+            )
+        )
+
+        expected = datetime(2026, 1, 1, 12, 5, tzinfo=UTC) + timedelta(
+            seconds=FADE_HALF_LIVES * 60.0
+        )
+        assert held.fade_expires_at(fade_half_life=60.0) == expected
+
+    def test_floor_logit_returns_none_at_fade_expiry(self) -> None:
+        fade_start = datetime(2026, 1, 1, 12, 5, tzinfo=UTC)
+        hold = DoorHold(
+            DoorHoldState(
+                held_from=None,
+                doors_open=False,
+                fade_from=fade_start,
+            )
+        )
+        fade_half_life = 60.0
+        before_expiry = fade_start + timedelta(
+            seconds=FADE_HALF_LIVES * fade_half_life - 1
+        )
+        at_expiry = fade_start + timedelta(seconds=FADE_HALF_LIVES * fade_half_life)
+
+        assert (
+            hold.floor_logit(
+                before_expiry,
+                bias=logit(0.1),
+                threshold=0.5,
+                fade_half_life=fade_half_life,
+            )
+            is not None
+        )
+        assert (
+            hold.floor_logit(
+                at_expiry,
+                bias=logit(0.1),
+                threshold=0.5,
+                fade_half_life=fade_half_life,
+            )
+            is None
+        )
 
 
 class TestAreaIntegration:

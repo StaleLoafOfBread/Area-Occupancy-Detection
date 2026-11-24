@@ -13,6 +13,11 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.area_occupancy.const import (
     CONF_AREA_ID,
     CONF_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDED_DEVICE_MATCHES,
+    CONF_EXCLUDED_MANUFACTURERS,
+    CONF_EXCLUDED_MODELS,
+    CONF_EXPAND_GROUPS,
     CONF_MOTION_SENSORS,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
@@ -26,6 +31,8 @@ from custom_components.area_occupancy.const import (
     DOMAIN,
     MIN_HA_VERSION,
     SUBENTRY_TYPE_AREA,
+    ExclusionMode,
+    GroupExpansionMode,
 )
 from custom_components.area_occupancy.migrations import (
     _cleanup_registry_devices_and_entities,
@@ -1696,7 +1703,7 @@ class TestMigrateAreasToSubentries:
 
 
 class TestMigrateMotionTimeoutDefault:
-    """v19 -> v20: areas still at the old 300 s default move to 90 s (#604).
+    """Migrate motion, light-power, and group-expansion area settings.
 
     The setting never reached learning before, so a stored 300 was the old
     default, not a tuned value; any other value is left alone.
@@ -1729,10 +1736,167 @@ class TestMigrateMotionTimeoutDefault:
 
         assert await async_migrate_entry(hass, entry)
 
-        assert entry.version == 20
+        assert entry.version == CONF_VERSION
         timeouts = {
             subentry.title: subentry.data.get(CONF_MOTION_TIMEOUT)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_AREA
         }
         assert timeouts == {"Living Room": 90, "Kitchen": 120, "Testing": None}
+
+    async def test_migrates_area_light_power_choices(
+        self, hass: HomeAssistant, setup_area_registry: dict[str, str]
+    ) -> None:
+        """Old booleans preserve their behavior when the per-area choice is added."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title="Area Occupancy Detection",
+            version=18,
+            data={
+                CONF_AREAS: [
+                    {
+                        CONF_AREA_ID: setup_area_registry["Living Room"],
+                        CONF_EXCLUDE_LIGHT_POWER: True,
+                    },
+                    {
+                        CONF_AREA_ID: setup_area_registry["Kitchen"],
+                        CONF_EXCLUDE_LIGHT_POWER: False,
+                    },
+                    {CONF_AREA_ID: setup_area_registry["Testing"]},
+                ]
+            },
+        )
+        entry.add_to_hass(hass)
+        _migrate_areas_to_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=19)
+
+        assert await async_migrate_entry(hass, entry)
+
+        migrated_settings = {
+            subentry.title: subentry.data[CONF_EXCLUDE_LIGHT_POWER]
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_AREA
+        }
+        assert entry.version == CONF_VERSION
+        assert migrated_settings == {
+            "Living Room": ExclusionMode.EXCLUDE,
+            "Kitchen": ExclusionMode.INCLUDE,
+            "Testing": ExclusionMode.FOLLOW_GLOBAL,
+        }
+
+    async def test_migrates_area_group_expansion_choices(
+        self, hass: HomeAssistant, setup_area_registry: dict[str, str]
+    ) -> None:
+        """Old booleans retain their group-expansion behavior."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title="Area Occupancy Detection",
+            version=18,
+            data={
+                CONF_AREAS: [
+                    {
+                        CONF_AREA_ID: setup_area_registry["Living Room"],
+                        CONF_EXPAND_GROUPS: True,
+                    },
+                    {
+                        CONF_AREA_ID: setup_area_registry["Kitchen"],
+                        CONF_EXPAND_GROUPS: False,
+                    },
+                    {CONF_AREA_ID: setup_area_registry["Testing"]},
+                ]
+            },
+        )
+        entry.add_to_hass(hass)
+        _migrate_areas_to_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=19)
+
+        assert await async_migrate_entry(hass, entry)
+
+        migrated_settings = {
+            subentry.title: subentry.data[CONF_EXPAND_GROUPS]
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_AREA
+        }
+        assert entry.version == CONF_VERSION
+        assert migrated_settings == {
+            "Living Room": GroupExpansionMode.EXPAND,
+            "Kitchen": GroupExpansionMode.KEEP,
+            "Testing": GroupExpansionMode.FOLLOW_GLOBAL,
+        }
+
+    async def test_migrates_excluded_device_matches_v22_to_v23(
+        self, hass: HomeAssistant, setup_area_registry: dict[str, str]
+    ) -> None:
+        """Legacy CONF_EXCLUDED_DEVICE_MATCHES splits into manufacturer/model lists."""
+        dev_reg = dr.async_get(hass)
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title="Area Occupancy Detection",
+            version=18,
+            data={
+                CONF_AREAS: [
+                    {
+                        CONF_AREA_ID: setup_area_registry["Living Room"],
+                        CONF_EXCLUDED_DEVICE_MATCHES: [
+                            "Hue",
+                            "Hue Motion",
+                            "unmatched-fragment",
+                        ],
+                    }
+                ]
+            },
+            options={
+                CONF_EXCLUDED_DEVICE_MATCHES: [
+                    "Signify",
+                    "CustomFragment",
+                ]
+            },
+        )
+        entry.add_to_hass(hass)
+        dev_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("hue", "1")},
+            manufacturer="Signify",
+            model="Hue Motion",
+            name="Sensor 1",
+        )
+        dev_reg.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("hue", "2")},
+            manufacturer="Hue",
+            model="Other",
+            name="Sensor 2",
+        )
+        _migrate_areas_to_subentries(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=22)
+
+        assert await async_migrate_entry(hass, entry)
+        assert entry.version == CONF_VERSION
+        assert CONF_EXCLUDED_DEVICE_MATCHES not in entry.options
+        assert entry.options[CONF_EXCLUDED_MANUFACTURERS] == [
+            "Signify",
+            "CustomFragment",
+        ]
+        assert entry.options[CONF_EXCLUDED_MODELS] == ["CustomFragment"]
+
+        subentry = next(
+            s
+            for s in entry.subentries.values()
+            if s.subentry_type == SUBENTRY_TYPE_AREA
+        )
+        assert CONF_EXCLUDED_DEVICE_MATCHES not in subentry.data
+        assert subentry.data[CONF_EXCLUDED_MANUFACTURERS] == [
+            "Hue",
+            "unmatched-fragment",
+        ]
+        assert subentry.data[CONF_EXCLUDED_MODELS] == [
+            "Hue Motion",
+            "unmatched-fragment",
+        ]
+
+        # Idempotent on re-run at current version.
+        assert await async_migrate_entry(hass, entry)
+        assert entry.options[CONF_EXCLUDED_MANUFACTURERS] == [
+            "Signify",
+            "CustomFragment",
+        ]

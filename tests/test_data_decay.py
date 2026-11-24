@@ -880,3 +880,42 @@ class TestDecaySleepOverride:
                 patch("homeassistant.util.dt.as_local", return_value=when),
             ):
                 assert decay.half_life == expected
+
+
+class TestDecayProjection:
+    """Tests for Decay.decay_factor_at() and Decay.expires_at()."""
+
+    def test_decay_factor_at_projects_without_mutating(self) -> None:
+        """decay_factor_at evaluates at arbitrary timestamps including future delay."""
+        start = datetime(2026, 1, 1, 12, 5, 0, tzinfo=dt_util.UTC)
+        decay = Decay(half_life=90.0, is_decaying=True, decay_start=start)
+
+        # Before decay_start (during PIR decay_delay): stays 1.0
+        assert decay.decay_factor_at(start - timedelta(seconds=60)) == 1.0
+        # Exactly one half-life after decay_start: 0.5
+        assert decay.decay_factor_at(start + timedelta(seconds=90)) == pytest.approx(
+            0.5
+        )
+        # Past practical 5% floor (> 4.3219 half-lives): snaps to 0.0
+        assert decay.decay_factor_at(start + timedelta(seconds=400)) == 0.0
+        assert decay.is_decaying is True
+
+    def test_decay_factor_at_inactive_and_invalid_half_life(self) -> None:
+        """Inactive decay stays 1.0; invalid half_life returns 0.0 cleanly."""
+        start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt_util.UTC)
+        inactive = Decay(half_life=90.0, is_decaying=False, decay_start=start)
+        assert inactive.decay_factor_at(start + timedelta(seconds=1000)) == 1.0
+        assert inactive.expires_at() is None
+
+        invalid = Decay(half_life=0.0, is_decaying=True, decay_start=start)
+        assert invalid.decay_factor_at(start + timedelta(seconds=1)) == 0.0
+        assert invalid.expires_at() == start
+
+    def test_expires_at_matches_practical_cutoff(self) -> None:
+        """Just before expires_at factor is >= 0.05; just after it is 0.0."""
+        start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt_util.UTC)
+        decay = Decay(half_life=90.0, is_decaying=True, decay_start=start)
+        expiry = decay.expires_at()
+        assert expiry is not None
+        assert decay.decay_factor_at(expiry - timedelta(seconds=0.1)) >= 0.05
+        assert decay.decay_factor_at(expiry + timedelta(seconds=0.1)) == 0.0

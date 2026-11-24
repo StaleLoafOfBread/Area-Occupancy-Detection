@@ -121,6 +121,7 @@ nav:
       - Sensor Health: features/sensor-health.md
       - Services: features/services.md
       - Time Priors Card: features/time-priors-card.md
+      - Dashboard: features/dashboard.md
   - Technical:
       - Deep Dive: technical/deep-dive.md
       - Analysis Chain: technical/analysis-chain.md

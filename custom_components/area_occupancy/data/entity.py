@@ -8,18 +8,19 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
+from ..config_helpers import resolve_decay_half_life, resolve_sleep_decay_half_life
 from ..const import (
     DEFAULT_BUTTON_PULSE_DURATION,
+    DEFAULT_SLEEP_DECAY_HALF_LIFE,
     MAX_WEIGHT,
     MIN_WEIGHT,
-    SLEEP_PRESENCE_HALF_LIFE,
     get_sensor_type_mapping,
 )
 from ..time_utils import to_utc
@@ -35,7 +36,7 @@ from .entity_type import (
     EntityType,
     InputType,
 )
-from .purpose import AreaPurpose, get_default_decay_half_life
+from .purpose import AreaPurpose
 from .types import GaussianParams
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from ..db import AreaOccupancyDB as DB
 
 _LOGGER = logging.getLogger(__name__)
+_WASP_DECAY_HALF_LIFE: Final[float] = 0.1
 
 
 class SleepOverrideProvider:
@@ -937,6 +939,27 @@ class EntityFactory:
             )
         return self._sleep_override_provider
 
+    def _resolve_sleep_half_life(self) -> float:
+        """Resolve the decay half-life in seconds for this area's sleep entity."""
+        return float(
+            resolve_sleep_decay_half_life(
+                getattr(
+                    self.config.decay, "sleep_half_life", DEFAULT_SLEEP_DECAY_HALF_LIFE
+                ),
+                self.coordinator,
+            )
+        )
+
+    def _resolve_entity_half_life(self, *, is_wasp: bool, is_sleep: bool) -> float:
+        """Resolve the decay half-life in seconds for a created entity."""
+        if is_wasp:
+            return _WASP_DECAY_HALF_LIFE
+        if is_sleep:
+            return self._resolve_sleep_half_life()
+        return resolve_decay_half_life(
+            self.config.decay.half_life, self.config.purpose, self.coordinator
+        )
+
     def create_from_db(self, entity_obj: DB.Entities) -> Entity:
         """Create entity from storage data.
 
@@ -1057,18 +1080,12 @@ class EntityFactory:
         # Create decay object
         # Wasp-in-Box sensors should not have decay (immediate vacancy)
         # Sleep sensors use a very long half-life (persistent presence)
-        half_life = self.config.decay.half_life
-        # If half_life is 0, resolve from purpose
-        if half_life == 0:
-            half_life = get_default_decay_half_life(self.config.purpose)
-
         area = self.coordinator.areas.get(self.area_name)
         is_wasp = area and area.wasp_entity_id == entity_id
         is_sleep = area and area.sleep_entity_id == entity_id
-        if is_wasp:
-            half_life = 0.1  # Effectively zero decay (clears in <0.5s)
-        elif is_sleep:
-            half_life = SLEEP_PRESENCE_HALF_LIFE
+        half_life = self._resolve_entity_half_life(
+            is_wasp=bool(is_wasp), is_sleep=bool(is_sleep)
+        )
 
         # Get sleep settings from integration config
         # For WASP/SLEEP entities, bypass sleeping semantics
@@ -1167,18 +1184,12 @@ class EntityFactory:
 
         # Wasp-in-Box sensors should not have decay (immediate vacancy)
         # Sleep sensors use a very long half-life (persistent presence)
-        half_life = self.config.decay.half_life
-        # If half_life is 0, resolve from purpose
-        if half_life == 0:
-            half_life = get_default_decay_half_life(self.config.purpose)
-
         area = self.coordinator.areas.get(self.area_name)
         is_wasp = area and area.wasp_entity_id == entity_id
         is_sleep = area and area.sleep_entity_id == entity_id
-        if is_wasp:
-            half_life = 0.1  # Effectively zero decay (clears in <0.5s)
-        elif is_sleep:
-            half_life = SLEEP_PRESENCE_HALF_LIFE
+        half_life = self._resolve_entity_half_life(
+            is_wasp=bool(is_wasp), is_sleep=bool(is_sleep)
+        )
 
         # Get sleep settings from integration config
         # For WASP/SLEEP entities, bypass sleeping semantics

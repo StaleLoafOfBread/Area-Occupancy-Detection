@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
+import json
+import logging
+from pathlib import Path
+import re
+from typing import Any, Final, cast
+import unicodedata
 
-from ..const import DEFAULT_PURPOSE
+from ..const import DEFAULT_DECAY_HALF_LIFE, DEFAULT_LANGUAGE, DEFAULT_PURPOSE
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AreaPurpose(StrEnum):
@@ -122,13 +132,18 @@ class Purpose:
             return purpose.replace("_", " ").title()
 
     @staticmethod
-    def is_purpose_half_life(value: float, purpose: str | None = None) -> bool:
+    def is_purpose_half_life(
+        value: float,
+        purpose: str | None = None,
+        overrides: Mapping[str, int | float] | None = None,
+    ) -> bool:
         """Check whether a half-life value matches the purpose's default.
 
         When ``purpose`` is provided, the value is compared only against that
-        purpose's built-in half-life. This is the correct check when deciding
-        whether a user-entered override should be normalised to 0 (auto), so
-        that switching purpose later picks up the new default.
+        purpose's effective default half-life (including any global override).
+        This is the correct check when deciding whether a user-entered override
+        should be normalised to 0 (auto), so that switching purpose or updating
+        global purpose defaults later picks up the new default.
 
         When ``purpose`` is ``None``, only the ``0`` sentinel returns True.
         The legacy behaviour of matching against *any* purpose's default was
@@ -138,19 +153,21 @@ class Purpose:
         Args:
             value: Half-life value to check.
             purpose: Purpose string to compare against. Optional.
+            overrides: Optional global per-purpose half-life overrides.
 
         Returns:
             True if the value is 0 (auto) or equals the selected purpose's
-            built-in half-life.
+            effective default half-life.
         """
-        if value == 0:
+        if value == DEFAULT_DECAY_HALF_LIFE:
             return True
         if purpose is None:
             return False
         try:
-            return PURPOSE_DEFINITIONS[AreaPurpose(purpose)].half_life == value
-        except (ValueError, KeyError):
+            _ = AreaPurpose(purpose)
+        except ValueError:
             return False
+        return get_default_decay_half_life(purpose, overrides) == value
 
     def cleanup(self) -> None:
         """Clean up the purpose (no-op for compatibility)."""
@@ -244,20 +261,381 @@ def get_purpose_options() -> list[dict[str, str]]:
     ]
 
 
-def get_default_decay_half_life(purpose: str | None = None) -> float:
+def _parse_positive_half_life(value: Any) -> float | None:
+    """Return a positive float half-life override, or ``None`` if invalid."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
+
+
+def get_default_decay_half_life(
+    purpose: str | None = None,
+    overrides: Mapping[str, int | float] | None = None,
+) -> float:
     """Get the default decay half-life based on the selected purpose.
 
     Args:
         purpose: The purpose string value. If None, uses DEFAULT_PURPOSE.
+        overrides: Optional global per-purpose half-life overrides in seconds.
 
     Returns:
         The half-life value in seconds for the given purpose.
     """
-    if purpose is not None:
+    default_purpose = AreaPurpose(DEFAULT_PURPOSE)
+    if purpose is None:
+        purpose_enum = default_purpose
+    else:
         try:
             purpose_enum = AreaPurpose(purpose)
-            return PURPOSE_DEFINITIONS[purpose_enum].half_life
-        except (ValueError, KeyError):
-            pass
-    # Fallback to default purpose half-life
-    return PURPOSE_DEFINITIONS[AreaPurpose(DEFAULT_PURPOSE)].half_life
+        except ValueError:
+            purpose_enum = default_purpose
+
+    if overrides and (
+        override := _parse_positive_half_life(overrides.get(purpose_enum.value))
+    ):
+        return override
+
+    return PURPOSE_DEFINITIONS[purpose_enum].half_life
+
+
+_DEFAULT_LEXICON_LOCALE: Final = DEFAULT_LANGUAGE
+_PURPOSE_KEYWORDS_DIR: Final = Path(__file__).parent / "purpose_keywords"
+_MDI_ICON_PREFIX: Final = "mdi:"
+_UNICODE_NORM_FORM: Final = "NFKD"
+_UNICODE_COMBINING_MARK_CATEGORY: Final = "Mn"
+_LEXICON_FILE_GLOB: Final = "*.json"
+_WORD_BOUNDARY_PATTERN_TEMPLATE: Final = r"(?<!\w){}(?!\w)"
+_UTF8_ENCODING: Final = "utf-8"
+
+_PURPOSE_INFERENCE_ORDER: Final[tuple[AreaPurpose, ...]] = (
+    AreaPurpose.BATHROOM,
+    AreaPurpose.SLEEPING,
+    AreaPurpose.FOOD_PREP,
+    AreaPurpose.EATING,
+    AreaPurpose.WORKING,
+    AreaPurpose.GARAGE,
+    AreaPurpose.DRIVEWAY,
+    AreaPurpose.GARDEN,
+    AreaPurpose.UTILITY,
+    AreaPurpose.PASSAGEWAY,
+    AreaPurpose.RELAXING,
+    AreaPurpose.SOCIAL,
+)
+
+# Language-independent Home Assistant area icon -> purpose mapping (without "mdi:" prefix).
+_PURPOSE_ICON_MAP: Final[dict[str, AreaPurpose]] = {
+    **dict.fromkeys(
+        ("shower", "shower-head", "bathtub", "bathtub-outline", "toilet"),
+        AreaPurpose.BATHROOM,
+    ),
+    **dict.fromkeys(
+        (
+            "bed",
+            "bed-empty",
+            "bed-king",
+            "bed-king-outline",
+            "bed-queen",
+            "bed-queen-outline",
+            "bed-double",
+            "bed-double-outline",
+            "bed-single",
+            "bed-single-outline",
+            "bunk-bed",
+            "bunk-bed-outline",
+            "cradle",
+            "cradle-outline",
+            "sleep",
+        ),
+        AreaPurpose.SLEEPING,
+    ),
+    **dict.fromkeys(
+        (
+            "stove",
+            "pot-steam",
+            "pot-steam-outline",
+            "countertop",
+            "countertop-outline",
+            "fridge",
+            "fridge-outline",
+            "microwave",
+            "chef-hat",
+        ),
+        AreaPurpose.FOOD_PREP,
+    ),
+    **dict.fromkeys(
+        ("silverware-fork-knife", "silverware", "table-chair", "food"),
+        AreaPurpose.EATING,
+    ),
+    **dict.fromkeys(
+        ("desk", "office-chair", "laptop", "monitor", "briefcase", "bookshelf"),
+        AreaPurpose.WORKING,
+    ),
+    **dict.fromkeys(
+        (
+            "garage",
+            "garage-variant",
+            "garage-open",
+            "garage-open-variant",
+            "tools",
+            "hammer-wrench",
+        ),
+        AreaPurpose.GARAGE,
+    ),
+    **dict.fromkeys(("car", "car-multiple", "parking"), AreaPurpose.DRIVEWAY),
+    **dict.fromkeys(
+        (
+            "flower",
+            "flower-outline",
+            "flower-tulip",
+            "flower-tulip-outline",
+            "tree",
+            "tree-outline",
+            "grass",
+            "grill",
+            "grill-outline",
+            "patio-heater",
+            "balcony",
+            "deck",
+        ),
+        AreaPurpose.GARDEN,
+    ),
+    **dict.fromkeys(
+        (
+            "washing-machine",
+            "tumble-dryer",
+            "hanger",
+            "wardrobe",
+            "wardrobe-outline",
+            "server",
+            "archive",
+            "home-battery",
+        ),
+        AreaPurpose.UTILITY,
+    ),
+    **dict.fromkeys(
+        (
+            "stairs",
+            "stairs-up",
+            "stairs-down",
+            "stairs-box",
+            "door-open",
+            "coat-rack",
+        ),
+        AreaPurpose.PASSAGEWAY,
+    ),
+    **dict.fromkeys(
+        (
+            "television",
+            "television-classic",
+            "movie",
+            "movie-open",
+            "filmstrip",
+            "book-open-page-variant",
+            "gamepad-variant",
+        ),
+        AreaPurpose.RELAXING,
+    ),
+    **dict.fromkeys(
+        (
+            "sofa",
+            "sofa-outline",
+            "sofa-single",
+            "sofa-single-outline",
+            "couch",
+            "home-group",
+            "table-furniture",
+        ),
+        AreaPurpose.SOCIAL,
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _CompiledPurposeLexicon:
+    """Pre-compiled keyword patterns and normalized terms for one locale."""
+
+    raw_keywords: tuple[tuple[AreaPurpose, tuple[str, ...]], ...]
+    word_patterns: tuple[tuple[AreaPurpose, tuple[re.Pattern[str], ...]], ...]
+    substrings: tuple[tuple[AreaPurpose, tuple[str, ...]], ...]
+
+
+def _normalize_purpose_text(text: str) -> str:
+    """Normalize text via NFKD decomposition, diacritic removal, and casefolding."""
+    decomposed = unicodedata.normalize(_UNICODE_NORM_FORM, text)
+    stripped = "".join(
+        ch
+        for ch in decomposed
+        if unicodedata.category(ch) != _UNICODE_COMBINING_MARK_CATEGORY
+    )
+    return stripped.casefold()
+
+
+def _compile_purpose_lexicon(raw_data: Mapping[str, Any]) -> _CompiledPurposeLexicon:
+    """Compile one locale's purpose keyword mapping in precedence order."""
+    raw_entries: list[tuple[AreaPurpose, tuple[str, ...]]] = []
+    pattern_entries: list[tuple[AreaPurpose, tuple[re.Pattern[str], ...]]] = []
+    substring_entries: list[tuple[AreaPurpose, tuple[str, ...]]] = []
+
+    for purpose in _PURPOSE_INFERENCE_ORDER:
+        terms = raw_data.get(purpose.value)
+        if not isinstance(terms, list):
+            continue
+        cleaned = tuple(
+            term.strip()
+            for term in cast("list[Any]", terms)
+            if isinstance(term, str) and term.strip()
+        )
+        if not cleaned:
+            continue
+        normalized_terms = tuple(
+            dict.fromkeys(
+                norm for term in cleaned if (norm := _normalize_purpose_text(term))
+            )
+        )
+        raw_entries.append((purpose, cleaned))
+        pattern_entries.append(
+            (
+                purpose,
+                tuple(
+                    re.compile(_WORD_BOUNDARY_PATTERN_TEMPLATE.format(re.escape(term)))
+                    for term in normalized_terms
+                ),
+            )
+        )
+        substring_entries.append((purpose, normalized_terms))
+
+    return _CompiledPurposeLexicon(
+        raw_keywords=tuple(raw_entries),
+        word_patterns=tuple(pattern_entries),
+        substrings=tuple(substring_entries),
+    )
+
+
+def _normalize_locale_tag(tag: str) -> str:
+    """Normalize a locale tag or filename stem to lowercase BCP-47 hyphen form."""
+    return tag.replace("_", "-").casefold()
+
+
+def _load_purpose_lexicons() -> dict[str, _CompiledPurposeLexicon]:
+    """Load and compile all shipped purpose keyword JSON lexicons once at import."""
+    lexicons: dict[str, _CompiledPurposeLexicon] = {}
+    if not _PURPOSE_KEYWORDS_DIR.is_dir():
+        return lexicons
+    for path in sorted(_PURPOSE_KEYWORDS_DIR.glob(_LEXICON_FILE_GLOB)):
+        try:
+            loaded = json.loads(path.read_text(encoding=_UTF8_ENCODING))
+        except (OSError, ValueError) as err:
+            _LOGGER.warning("Failed to load purpose lexicon %s: %s", path.name, err)
+            continue
+        if isinstance(loaded, Mapping):
+            lexicons[_normalize_locale_tag(path.stem)] = _compile_purpose_lexicon(
+                cast("Mapping[str, Any]", loaded)
+            )
+    return lexicons
+
+
+_PURPOSE_LEXICONS: Final[dict[str, _CompiledPurposeLexicon]] = _load_purpose_lexicons()
+
+
+def _resolve_locale_chain(language: str | None) -> tuple[str, ...]:
+    """Return ordered BCP-47 locale candidates for ``language``."""
+    if not isinstance(language, str) or not (cleaned := language.strip()):
+        return (_DEFAULT_LEXICON_LOCALE,)
+    tag = _normalize_locale_tag(cleaned)
+    parts = [part for part in tag.split("-") if part]
+    if not parts:
+        return (_DEFAULT_LEXICON_LOCALE,)
+    return tuple("-".join(parts[:idx]) for idx in range(len(parts), 0, -1))
+
+
+def get_purpose_keywords(
+    language: str | None = None,
+) -> tuple[tuple[AreaPurpose, tuple[str, ...]], ...]:
+    """Return the keyword lexicon for ``language``, falling back to English."""
+    for locale in _resolve_locale_chain(language):
+        if (lexicon := _PURPOSE_LEXICONS.get(locale)) is not None:
+            return lexicon.raw_keywords
+    if (fallback := _PURPOSE_LEXICONS.get(_DEFAULT_LEXICON_LOCALE)) is not None:
+        return fallback.raw_keywords
+    return ()
+
+
+PURPOSE_NAME_KEYWORDS: Final[tuple[tuple[AreaPurpose, tuple[str, ...]], ...]] = (
+    get_purpose_keywords(_DEFAULT_LEXICON_LOCALE)
+)
+
+
+def _match_lexicon(
+    lexicon: _CompiledPurposeLexicon, normalized_texts: tuple[str, ...]
+) -> AreaPurpose | None:
+    """Return the first purpose matching word boundaries or substrings."""
+    for purpose, patterns in lexicon.word_patterns:
+        if any(
+            pattern.search(text) for text in normalized_texts for pattern in patterns
+        ):
+            return purpose
+    for purpose, keywords in lexicon.substrings:
+        if any(keyword in text for text in normalized_texts for keyword in keywords):
+            return purpose
+    return None
+
+
+def _infer_purpose_from_icon(icon: str | None) -> AreaPurpose | None:
+    """Map an ``mdi:*`` area icon to an ``AreaPurpose`` when recognized."""
+    if not isinstance(icon, str):
+        return None
+    slug = icon.strip().casefold().removeprefix(_MDI_ICON_PREFIX)
+    return _PURPOSE_ICON_MAP.get(slug)
+
+
+def _collect_normalized_texts(
+    area_name: str | None, aliases: Collection[str] | None
+) -> tuple[str, ...]:
+    """Collect and normalize non-empty area names and aliases."""
+    return tuple(
+        norm
+        for text in (area_name, *(aliases or ()))
+        if isinstance(text, str)
+        and text.strip()
+        and (norm := _normalize_purpose_text(text))
+    )
+
+
+def _match_locale_chain(
+    locales: tuple[str, ...], normalized_texts: tuple[str, ...]
+) -> AreaPurpose | None:
+    """Match normalized area texts against compiled lexicons in locale fallback order."""
+    for locale in locales:
+        if (lexicon := _PURPOSE_LEXICONS.get(locale)) is None:
+            continue
+        if matched := _match_lexicon(lexicon, normalized_texts):
+            return matched
+    return None
+
+
+def infer_purpose_from_name(
+    area_name: str | None,
+    *,
+    language: str | None = None,
+    icon: str | None = None,
+    aliases: Collection[str] | None = None,
+) -> str:
+    """Infer an AreaPurpose value from area name, aliases, locale lexicon, and icon."""
+    normalized_texts = _collect_normalized_texts(area_name, aliases)
+    locales = _resolve_locale_chain(language)
+    if normalized_texts and (matched := _match_locale_chain(locales, normalized_texts)):
+        return matched.value
+
+    if icon_match := _infer_purpose_from_icon(icon):
+        return icon_match.value
+
+    if (
+        normalized_texts
+        and _DEFAULT_LEXICON_LOCALE not in locales
+        and (
+            matched := _match_locale_chain((_DEFAULT_LEXICON_LOCALE,), normalized_texts)
+        )
+    ):
+        return matched.value
+
+    return DEFAULT_PURPOSE

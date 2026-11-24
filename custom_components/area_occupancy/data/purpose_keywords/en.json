@@ -1,0 +1,119 @@
+{
+  "bathroom": [
+    "bathroom",
+    "bath",
+    "ensuite",
+    "en-suite",
+    "en suite",
+    "powder",
+    "restroom",
+    "toilet",
+    "wc",
+    "lavatory",
+    "shower"
+  ],
+  "sleeping": [
+    "bedroom",
+    "bed",
+    "nursery",
+    "guest room",
+    "master",
+    "bunk",
+    "sleeping"
+  ],
+  "food_prep": [
+    "kitchen",
+    "kitchenette",
+    "cooking",
+    "scullery"
+  ],
+  "eating": [
+    "dining",
+    "breakfast",
+    "dinette",
+    "eating"
+  ],
+  "working": [
+    "office",
+    "study",
+    "desk",
+    "work",
+    "library",
+    "studio"
+  ],
+  "garage": [
+    "garage",
+    "workshop",
+    "carport",
+    "shed"
+  ],
+  "driveway": [
+    "driveway",
+    "parking"
+  ],
+  "garden": [
+    "garden",
+    "yard",
+    "backyard",
+    "front yard",
+    "patio",
+    "deck",
+    "porch",
+    "balcony",
+    "terrace",
+    "lawn"
+  ],
+  "utility": [
+    "utility",
+    "laundry",
+    "pantry",
+    "mudroom",
+    "mud room",
+    "boot room",
+    "closet",
+    "wardrobe",
+    "storage",
+    "basement",
+    "cellar",
+    "attic",
+    "boiler",
+    "server"
+  ],
+  "passageway": [
+    "hallway",
+    "hall",
+    "corridor",
+    "passage",
+    "foyer",
+    "entry",
+    "entryway",
+    "vestibule",
+    "landing",
+    "stair",
+    "stairs",
+    "staircase",
+    "lobby"
+  ],
+  "relaxing": [
+    "media",
+    "theater",
+    "theatre",
+    "cinema",
+    "den",
+    "snug",
+    "reading",
+    "lounge"
+  ],
+  "social": [
+    "living",
+    "family",
+    "sitting",
+    "playroom",
+    "play room",
+    "game",
+    "rec room",
+    "great room",
+    "sunroom",
+    "conservatory"
+  ]
+}

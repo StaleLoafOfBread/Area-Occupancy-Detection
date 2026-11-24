@@ -7,8 +7,10 @@ This represents a single device area in the multi-area architecture.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import logging
-from typing import TYPE_CHECKING, Any
+import math
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.util import dt as dt_util
@@ -26,6 +28,7 @@ from ..data.adjacency import apply_logit_boost
 from ..data.analysis import start_prior_analysis
 from ..data.door_hold import DoorHold
 from ..data.health import HealthMonitor
+from ..time_utils import to_utc
 from ..utils import (
     apply_activity_boost,
     clamp_probability,
@@ -49,6 +52,10 @@ else:
     from ..data.purpose import Purpose
 
 _LOGGER = logging.getLogger(__name__)
+
+# Binary-search resolution and post-cutoff safety margin for decay_clear_at().
+_CLEAR_AT_PRECISION_SECONDS: Final[float] = 0.25
+_CLEAR_AT_EXPIRY_MARGIN_SECONDS: Final[float] = 1.0
 
 
 class AreaDeviceHandle:
@@ -235,7 +242,9 @@ class Area:
             sw_version=DEVICE_SW_VERSION,
         )
 
-    def _base_probability(self, prior: float | None = None) -> float:
+    def _base_probability(
+        self, prior: float | None = None, *, at: datetime | None = None
+    ) -> float:
         """Calculate sensor-only occupancy probability (no activity boost).
 
         Combines presence probability (from strong binary indicators) with
@@ -252,8 +261,8 @@ class Area:
         if not entities:
             return MIN_PROBABILITY
 
-        presence = self.presence_probability(prior=prior)
-        env = self.environmental_confidence()
+        presence = self.presence_probability(prior=prior, at=at)
+        env = self.environmental_confidence(at=at)
 
         # Short-circuit on neutral environmental confidence. 0.5 is what
         # environmental_confidence() returns whenever the environmental channel
@@ -291,25 +300,25 @@ class Area:
         """
         return self._probability_from_base(self._base_probability(prior=AWAY_PRIOR))
 
+    def _apply_activity_boost(self, base: float, *, is_occupied: bool) -> float:
+        """Apply detected activity boost to a base probability."""
+        activity = detect_activity(self, base_probability=base, is_occupied=is_occupied)
+        if activity.activity_id in (ActivityId.UNOCCUPIED, ActivityId.IDLE):
+            return base
+        return apply_activity_boost(base, activity.occupancy_boost, activity.confidence)
+
     def _probability_from_base(self, base: float) -> float:
         """Apply the activity and adjacency boosts to a base probability."""
-        is_occupied = base >= self.config.threshold
-
-        activity = detect_activity(self, base_probability=base, is_occupied=is_occupied)
-
-        if activity.activity_id in (ActivityId.UNOCCUPIED, ActivityId.IDLE):
-            result = base
-        else:
-            result = apply_activity_boost(
-                base, activity.occupancy_boost, activity.confidence
-            )
+        result = self._apply_activity_boost(
+            base, is_occupied=base >= self.config.threshold
+        )
 
         boost = self.coordinator.adjacency_boost_for(self.area_name)
         if boost is not None:
             result = apply_logit_boost(result, boost)
         return self._apply_door_hold(result)
 
-    def _apply_door_hold(self, result: float) -> float:
+    def _apply_door_hold(self, result: float, *, at: datetime | None = None) -> float:
         """Floor the probability while the closed-door hold is on (#558).
 
         Applied last, as a floor rather than evidence, so it never adds to
@@ -320,8 +329,9 @@ class Area:
         hold = self.coordinator.door_hold_for(self.area_name)
         if not isinstance(hold, DoorHold):
             return result
+        now = dt_util.utcnow() if at is None else to_utc(at)
         floor = hold.floor_logit(
-            dt_util.utcnow(),
+            now,
             bias=logit(self.prior.value),
             threshold=self.config.threshold,
             fade_half_life=self.config.decay.half_life,
@@ -330,7 +340,9 @@ class Area:
             return result
         return max(result, clamp_probability(sigmoid(floor)))
 
-    def presence_probability(self, prior: float | None = None) -> float:
+    def presence_probability(
+        self, prior: float | None = None, *, at: datetime | None = None
+    ) -> float:
         """Calculate presence probability from strong binary indicators.
 
         Uses motion, media, appliances, doors, windows, covers, power, and
@@ -339,6 +351,7 @@ class Area:
         Args:
             prior: Prior to use instead of the area's learned one (the
                 away shadow, #584). ``None`` uses ``self.prior.value``.
+            at: Optional UTC timestamp at which to evaluate decaying entities.
 
         Returns:
             Probability value (0.0-1.0)
@@ -354,13 +367,17 @@ class Area:
             prior=self.prior.value if prior is None else prior,
             correlations=correlations,
             threshold=self.config.threshold,
+            at=at,
         )
 
-    def environmental_confidence(self) -> float:
+    def environmental_confidence(self, *, at: datetime | None = None) -> float:
         """Calculate environmental support confidence.
 
         Uses temperature, humidity, illuminance, CO2, and other environmental
         sensors to determine how much the environment supports occupancy.
+
+        Args:
+            at: Optional UTC timestamp at which to evaluate decaying entities.
 
         Returns:
             Confidence value (0.0-1.0), where 0.5 is neutral
@@ -371,7 +388,78 @@ class Area:
 
         correlations = self._get_entity_correlations()
 
-        return calc_env(entities, correlations=correlations)
+        return calc_env(entities, correlations=correlations, at=at)
+
+    def _probability_at(self, at: datetime) -> float:
+        """Project occupancy probability at ``at`` assuming no new sensor events."""
+        base = self._base_probability(at=at)
+        result = base
+        boost = self.coordinator.adjacency_boost_for(self.area_name)
+        if boost is not None:
+            # Activity boost is non-negative and only fires when base >= threshold,
+            # so it can only affect future threshold crossing when a negative
+            # adjacency boost pulls an otherwise occupied area downward.
+            if base >= self.config.threshold and boost.logit_contribution < 0:
+                result = self._apply_activity_boost(base, is_occupied=True)
+            result = apply_logit_boost(result, boost)
+        return self._apply_door_hold(result, at=at)
+
+    def _decay_expiry_ceiling(self, now: datetime) -> datetime | None:
+        """Return the latest UTC timestamp when all active decays finish, or None."""
+        candidates: list[datetime] = [
+            max(now, to_utc(expires))
+            for entity in self.entities.decaying_entities
+            if isinstance((expires := entity.decay.expires_at()), datetime)
+        ]
+        if self.config.closed_door_hold:
+            hold = self.coordinator.door_hold_for(self.area_name)
+            if (
+                isinstance(hold, DoorHold)
+                and (fade_end := hold.fade_expires_at(self.config.decay.half_life))
+                is not None
+            ):
+                candidates.append(max(now, to_utc(fade_end)))
+        return max(candidates, default=None)
+
+    def decay_clear_at(self, now: datetime | None = None) -> datetime | None:
+        """Return the projected UTC time occupancy will clear from decay, or None.
+
+        Evaluates the occupancy probability model forward in time, accounting
+        for per-entity ``decay_delay`` (future ``decay_start``), multiple
+        decaying sensors, unclamped log-odds above 99%, the 5% decay cutoff,
+        adjacency boosts, and closed-door holds.
+
+        Returns ``None`` when decay is disabled, the area is already
+        unoccupied, nothing is decaying, or non-decaying evidence or holds
+        keep the probability at or above threshold after all decays finish.
+        """
+        if not self.config.decay.enabled:
+            return None
+
+        current = dt_util.utcnow() if now is None else to_utc(now)
+        threshold = self.config.threshold
+        if self._probability_at(current) < threshold:
+            return None
+
+        expiry = self._decay_expiry_ceiling(current)
+        if expiry is None:
+            return None
+
+        # Step past the 5% cutoff so all decaying factors are guaranteed to be 0.0.
+        t_end = expiry + timedelta(seconds=_CLEAR_AT_EXPIRY_MARGIN_SECONDS)
+        if self._probability_at(t_end) >= threshold:
+            return None
+
+        lo = current.timestamp()
+        hi = t_end.timestamp()
+        while hi - lo > _CLEAR_AT_PRECISION_SECONDS:
+            mid = (lo + hi) / 2.0
+            if self._probability_at(datetime.fromtimestamp(mid, tz=UTC)) >= threshold:
+                lo = mid
+            else:
+                hi = mid
+
+        return datetime.fromtimestamp(math.ceil(hi), tz=UTC)
 
     def _get_entity_correlations(self) -> dict[str, float]:
         """Get cached correlation strengths for this area.

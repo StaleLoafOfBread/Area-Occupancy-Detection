@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 import logging
 from typing import Any, Final, TypedDict
 
@@ -25,6 +26,8 @@ from homeassistant.const import (
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN: Final = "area_occupancy"
+INTEGRATION_TITLE: Final = "Area Occupancy Detection"
+DEFAULT_LANGUAGE: Final = "en"
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SENSOR]
 
 # Bundled Lovelace card, served by the integration itself (see async_setup).
@@ -33,6 +36,7 @@ PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SENSOR]
 FRONTEND_DIR: Final = "frontend"
 FRONTEND_URL_BASE: Final = f"/{DOMAIN}/frontend"
 TIME_PRIORS_CARD_FILENAME: Final = "area-occupancy-time-priors-card.js"
+DASHBOARD_STRATEGY_FILENAME: Final = "area-occupancy-dashboard-strategy.js"
 FRONTEND_REGISTERED_KEY: Final = f"{DOMAIN}_frontend_registered"
 
 # Device information
@@ -46,7 +50,7 @@ MIN_HA_VERSION: Final = "2026.9.0"
 # into its own config subentry (see migrations.py). Bumping this no longer
 # costs anyone their learned history -- that is what DB_SCHEMA_VERSION below
 # is for.
-CONF_VERSION: Final = 20
+CONF_VERSION: Final = 23
 CONF_VERSION_MINOR: Final = 0
 # Version stamp of the SQLite schema, stored in the ``metadata`` table as
 # ``db_version``. Deliberately independent of ``CONF_VERSION`` (the config
@@ -91,6 +95,38 @@ CONF_PURPOSE: Final = "purpose"
 CONF_ADJACENT_AREAS: Final = (
     "adjacent_areas"  # JSON list of adjacent area_ids; consumed by AreaRelationships
 )
+CONF_AUTO_DISCOVER_SENSORS: Final = "auto_discover_sensors"
+CONF_AUTO_DISCOVER_DOMAINS: Final = "auto_discover_domains"
+CONF_AUTO_ADDED_SENSORS: Final = "auto_added_sensors"
+CONF_EXCLUDED_INTEGRATIONS: Final = "excluded_integrations"
+CONF_EXCLUDED_DEVICE_MATCHES: Final = "excluded_device_matches"
+CONF_EXCLUDED_MANUFACTURERS: Final = "excluded_manufacturers"
+CONF_EXCLUDED_MODELS: Final = "excluded_models"
+CONF_EXCLUDED_SENSORS: Final = "excluded_sensors"
+CONF_EXCLUDED_SENSOR_TYPES: Final = "excluded_sensor_types"
+
+
+class ExclusionMode(StrEnum):
+    """Tri-state area override for discovery exclusion rules."""
+
+    FOLLOW_GLOBAL = "follow_global"
+    EXCLUDE = "exclude"
+    INCLUDE = "include"
+
+
+class GroupExpansionMode(StrEnum):
+    """Tri-state area override for Home Assistant group expansion."""
+
+    FOLLOW_GLOBAL = "follow_global"
+    EXPAND = "expand"
+    KEEP = "keep"
+
+
+CONF_EXCLUDE_LIGHT_POWER: Final = "exclude_light_power"
+CONF_EXCLUDE_OCCUPANCY_SUBZONES: Final = "exclude_occupancy_subzones"
+CONF_EXCLUDE_REMOTE_LOCKS: Final = "exclude_remote_locks"
+CONF_EXCLUDE_VEHICLE_DETECTED: Final = "exclude_vehicle_detected"
+CONF_EXPAND_GROUPS: Final = "expand_groups"
 CONF_MOTION_SENSORS: Final = "motion_sensors"
 CONF_MOTION_PROB_GIVEN_TRUE: Final = "motion_prob_given_true"
 CONF_MOTION_PROB_GIVEN_FALSE: Final = "motion_prob_given_false"
@@ -131,6 +167,8 @@ CONF_CUSTOM_NUMERIC_ACTIVE_MAX: Final = "custom_numeric_active_max"
 CONF_THRESHOLD: Final = "threshold"
 CONF_DECAY_ENABLED: Final = "decay_enabled"
 CONF_DECAY_HALF_LIFE: Final = "decay_half_life"
+CONF_SLEEP_DECAY_HALF_LIFE: Final = "sleep_decay_half_life"
+CONF_PURPOSE_DECAY_HALF_LIVES: Final = "purpose_decay_half_lives"
 CONF_MEDIA_ACTIVE_STATES: Final = "media_active_states"
 CONF_MOTION_TIMEOUT: Final = "motion_timeout"
 CONF_MIN_PRIOR_OVERRIDE: Final = "min_prior_override"
@@ -172,10 +210,68 @@ CONF_WEIGHT_CUSTOM_NUMERIC: Final = "weight_custom_numeric"
 CONF_WEIGHT_WASP: Final = "weight_wasp"
 
 # Default values
+DEFAULT_AUTO_DISCOVER_SENSORS: Final[bool] = True
+DEFAULT_AREA_EXCLUSION_SETTING: Final = ExclusionMode.FOLLOW_GLOBAL
+DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER: Final[bool] = True
+DEFAULT_GLOBAL_EXCLUDE_OCCUPANCY_SUBZONES: Final[bool] = True
+DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS: Final[bool] = True
+DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED: Final[bool] = True
+DEVICE_ATTR_MANUFACTURER: Final = "manufacturer"
+DEVICE_ATTR_MODEL: Final = "model"
+GROUP_EXPANSION_SETTING_LABEL: Final = "group-expansion"
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryExclusionRule:
+    """Authoritative definition of a tri-state discovery exclusion rule."""
+
+    config_key: str
+    global_default: bool
+    translation_key: str
+    setting_label: str
+
+
+DISCOVERY_EXCLUSION_RULES: Final[tuple[DiscoveryExclusionRule, ...]] = (
+    DiscoveryExclusionRule(
+        config_key=CONF_EXCLUDE_LIGHT_POWER,
+        global_default=DEFAULT_GLOBAL_EXCLUDE_LIGHT_POWER,
+        translation_key="light_power_exclusion",
+        setting_label="light-power exclusion",
+    ),
+    DiscoveryExclusionRule(
+        config_key=CONF_EXCLUDE_OCCUPANCY_SUBZONES,
+        global_default=DEFAULT_GLOBAL_EXCLUDE_OCCUPANCY_SUBZONES,
+        translation_key="occupancy_subzone_exclusion",
+        setting_label="occupancy-subzone exclusion",
+    ),
+    DiscoveryExclusionRule(
+        config_key=CONF_EXCLUDE_REMOTE_LOCKS,
+        global_default=DEFAULT_GLOBAL_EXCLUDE_REMOTE_LOCKS,
+        translation_key="remote_lock_exclusion",
+        setting_label="remote-lock exclusion",
+    ),
+    DiscoveryExclusionRule(
+        config_key=CONF_EXCLUDE_VEHICLE_DETECTED,
+        global_default=DEFAULT_GLOBAL_EXCLUDE_VEHICLE_DETECTED,
+        translation_key="vehicle_detected_exclusion",
+        setting_label="vehicle-detected exclusion",
+    ),
+)
+DISCOVERY_EXCLUSION_RULES_BY_KEY: Final[dict[str, DiscoveryExclusionRule]] = {
+    rule.config_key: rule for rule in DISCOVERY_EXCLUSION_RULES
+}
+
+DEFAULT_EXCLUDED_DEVICE_MATCHES: Final[tuple[str, ...]] = ()
+DEFAULT_EXCLUDED_MANUFACTURERS: Final[tuple[str, ...]] = ()
+DEFAULT_EXCLUDED_MODELS: Final[tuple[str, ...]] = ()
+DEFAULT_GLOBAL_EXPAND_GROUPS: Final[bool] = True
+DEFAULT_AREA_EXPAND_GROUPS: Final[GroupExpansionMode] = GroupExpansionMode.FOLLOW_GLOBAL
+DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = CONF_OPTION_PREFIX_AREA
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose
 DEFAULT_DECAY_ENABLED: Final = True
 DEFAULT_DECAY_HALF_LIFE: Final = 0  # 0 means "use purpose value"
+DEFAULT_SLEEP_DECAY_HALF_LIFE: Final = 0  # 0 means "use global default"
 DEFAULT_DOOR_ACTIVE_STATE: Final = STATE_OPEN
 DEFAULT_LOCK_ACTIVE_STATE: Final = LockState.UNLOCKED
 DEFAULT_WINDOW_ACTIVE_STATE: Final = STATE_OPEN
@@ -583,6 +679,16 @@ ATTR_PEOPLE_DETAILS: Final = "people"
 ATTR_PERSON_NAME: Final = "name"
 ATTR_PERSON_SLEEPING: Final = "sleeping"
 
+# Probability sensor diagnostic attributes
+ATTR_ACTIVE_ENTITIES: Final = "active_entities"
+ATTR_DECAYING_ENTITIES: Final = "decaying_entities"
+ATTR_DECAYING_HALF_LIVES: Final = "decaying_half_lives"
+ATTR_DECAYING_EXPIRES_AT: Final = "decaying_expires_at"
+ATTR_DECAY_CLEAR_AT: Final = "decay_clear_at"
+ATTR_ADJACENT_AREAS: Final = "adjacent_areas"
+ATTR_ENVIRONMENTAL_ENTITIES: Final = "environmental_entities"
+ATTR_DECAY_FACTOR: Final = "decay_factor"
+
 
 # ────────────────────────────────────── State Mapping ───────────────────────────
 
@@ -739,6 +845,36 @@ def get_default_state(platform_type: str) -> str:
     return states["default"]
 
 
+# Authoritative area sensor config key -> InputType slug mapping, plus reverse map.
+SENSOR_KEY_TO_TYPE_SLUG: Final[dict[str, str]] = {
+    CONF_MOTION_SENSORS: "motion",
+    CONF_DOOR_SENSORS: "door",
+    CONF_WINDOW_SENSORS: "window",
+    CONF_LOCK_SENSORS: "lock",
+    CONF_COVER_SENSORS: "cover",
+    CONF_MEDIA_DEVICES: "media",
+    CONF_APPLIANCES: "appliance",
+    CONF_BUTTON_SENSORS: "button",
+    CONF_POWER_SENSORS: "power",
+    CONF_WIFI_CLIENTS_SENSORS: "wifi_clients",
+    CONF_CUSTOM_BINARY_SENSORS: "custom_binary",
+    CONF_CUSTOM_NUMERIC_SENSORS: "custom_numeric",
+    CONF_TEMPERATURE_SENSORS: "temperature",
+    CONF_HUMIDITY_SENSORS: "humidity",
+    CONF_ILLUMINANCE_SENSORS: "illuminance",
+    CONF_CO2_SENSORS: "co2",
+    CONF_CO_SENSORS: "co",
+    CONF_SOUND_PRESSURE_SENSORS: "sound_pressure",
+    CONF_PRESSURE_SENSORS: "pressure",
+    CONF_AIR_QUALITY_SENSORS: "air_quality",
+    CONF_VOC_SENSORS: "voc",
+    CONF_PM25_SENSORS: "pm25",
+    CONF_PM10_SENSORS: "pm10",
+}
+TYPE_SLUG_TO_SENSOR_KEY: Final[dict[str, str]] = {
+    slug: key for key, slug in SENSOR_KEY_TO_TYPE_SLUG.items()
+}
+
 # Sensor type string -> InputType mapping (alphabetized).
 # Lazy-loaded to avoid circular imports with data.entity_type.
 _sensor_type_mapping: dict[str, Any] | None = None
@@ -750,41 +886,39 @@ def get_sensor_type_mapping() -> dict[str, Any]:
     if _sensor_type_mapping is None:
         from .data.entity_type import InputType  # noqa: PLC0415
 
-        _sensor_type_mapping = {
-            "air_quality": InputType.AIR_QUALITY,
-            "appliance": InputType.APPLIANCE,
-            "button": InputType.BUTTON,
-            "co": InputType.CO,
-            "co2": InputType.CO2,
-            "cover": InputType.COVER,
-            "custom_binary": InputType.CUSTOM_BINARY,
-            "custom_numeric": InputType.CUSTOM_NUMERIC,
-            "door": InputType.DOOR,
-            "humidity": InputType.HUMIDITY,
-            "illuminance": InputType.ILLUMINANCE,
-            "lock": InputType.LOCK,
-            "media": InputType.MEDIA,
-            "motion": InputType.MOTION,
-            "pm10": InputType.PM10,
-            "pm25": InputType.PM25,
-            "power": InputType.POWER,
-            "pressure": InputType.PRESSURE,
-            "sleep": InputType.SLEEP,
-            "sound_pressure": InputType.SOUND_PRESSURE,
-            "temperature": InputType.TEMPERATURE,
-            "voc": InputType.VOC,
-            "wifi_clients": InputType.WIFI_CLIENTS,
-            "window": InputType.WINDOW,
-        }
+        slugs = sorted((*TYPE_SLUG_TO_SENSOR_KEY, InputType.SLEEP.value))
+        _sensor_type_mapping = {slug: InputType(slug) for slug in slugs}
     return _sensor_type_mapping
 
 
 # Fields that use DurationSelector and need conversion.
 DURATION_FIELDS: Final[set[str]] = {
     CONF_DECAY_HALF_LIFE,
+    CONF_SLEEP_DECAY_HALF_LIFE,
     CONF_MOTION_TIMEOUT,
     CONF_WASP_MAX_DURATION,
     CONF_WASP_MOTION_TIMEOUT,
     CONF_WASP_VERIFICATION_DELAY,
     CONF_BUTTON_PULSE_DURATION,
 }
+
+# Outdoor weather integrations and entity_id keywords excluded from indoor sensor discovery.
+WEATHER_PLATFORMS: Final[frozenset[str]] = frozenset(
+    {
+        "weather",
+        "met",
+        "openweathermap",
+        "accuweather",
+        "weatherflow",
+        "pirateweather",
+        "darksky",
+        "buienradar",
+        "bom",
+        "weatherkit",
+        "metoffice",
+        "nws",
+        "dwd",  # Deutscher Wetterdienst (German Weather Service) - official integration
+        "dwd_weather",  # DWD Weather by FL550 - HACS custom integration
+    }
+)
+WEATHER_KEYWORDS: Final[tuple[str, ...]] = ("weather", "forecast")

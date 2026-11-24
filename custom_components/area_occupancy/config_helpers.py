@@ -12,9 +12,13 @@ them into an exception as they see fit.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import Any, Final, TypeVar, cast
 
 import voluptuous as vol
+
+from homeassistant.config_entries import SOURCE_IGNORE
 
 from .const import (
     CONF_ADJACENT_AREAS,
@@ -46,6 +50,8 @@ from .const import (
     CONF_PERSON_SLEEP_AREA,
     CONF_PERSON_SLEEP_SENSORS,
     CONF_PURPOSE,
+    CONF_PURPOSE_DECAY_HALF_LIVES,
+    CONF_SLEEP_DECAY_HALF_LIFE,
     CONF_THRESHOLD,
     CONF_WEIGHT_APPLIANCE,
     CONF_WEIGHT_BUTTON,
@@ -63,6 +69,8 @@ from .const import (
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_APPLIANCE_ACTIVE_STATES,
+    DEFAULT_AREA_EXCLUSION_SETTING,
+    DEFAULT_AREA_EXPAND_GROUPS,
     DEFAULT_COVER_ACTIVE_STATES,
     DEFAULT_CUSTOM_BINARY_ACTIVE_STATES,
     DEFAULT_CUSTOM_NUMERIC_ACTIVE_MAX,
@@ -76,6 +84,7 @@ from .const import (
     DEFAULT_MOTION_PROB_GIVEN_TRUE,
     DEFAULT_PURPOSE,
     DEFAULT_SLEEP_CONFIDENCE_THRESHOLD,
+    DEFAULT_SLEEP_DECAY_HALF_LIFE,
     DEFAULT_WEIGHT_APPLIANCE,
     DEFAULT_WEIGHT_BUTTON,
     DEFAULT_WEIGHT_COVER,
@@ -91,9 +100,15 @@ from .const import (
     DEFAULT_WEIGHT_WINDOW,
     DEFAULT_WINDOW_ACTIVE_STATE,
     DURATION_FIELDS,
+    GROUP_EXPANSION_SETTING_LABEL,
+    SLEEP_PRESENCE_HALF_LIFE,
     SUBENTRY_TYPE_AREA,
+    ExclusionMode,
+    GroupExpansionMode,
 )
-from .data.purpose import Purpose
+
+_ModeT = TypeVar("_ModeT", bound=StrEnum)
+_DEFAULT_EXCLUSION_SETTING_LABEL: Final = "exclusion"
 
 # ── Shared bounds ────────────────────────────────────────────────────
 # One definition for the UI selectors, the server-side validator and the
@@ -113,6 +128,18 @@ DECAY_HALF_LIFE_MIN = 10
 DECAY_HALF_LIFE_MAX = 3600
 BUTTON_PULSE_DURATION_MIN = 5
 BUTTON_PULSE_DURATION_MAX = 600
+
+# Explicit sleep presence decay half-life bounds in seconds. For per-area
+# overrides, ``0`` is the sentinel for "use the global default".
+SLEEP_DECAY_HALF_LIFE_MIN = 10
+SLEEP_DECAY_HALF_LIFE_MAX = 86400
+
+# Translation error keys returned by decay validators.
+ERROR_INVALID_DECAY_HALF_LIFE: Final = "invalid_decay_half_life"
+ERROR_INVALID_SLEEP_DECAY_HALF_LIFE: Final = "invalid_sleep_decay_half_life"
+ERROR_INVALID_GLOBAL_SLEEP_DECAY_HALF_LIFE: Final = (
+    "invalid_global_sleep_decay_half_life"
+)
 
 # Every per-type weight key with its default, in one place so the validator
 # and any future per-type UI iterate the same list.
@@ -267,6 +294,25 @@ def validate_threshold(value: Any) -> str | None:
     return None
 
 
+def _validate_half_life_bounds(
+    value: Any,
+    *,
+    min_seconds: int,
+    max_seconds: int,
+    allow_zero: bool,
+    zero_sentinel: int,
+    error_key: str,
+) -> str | None:
+    """Validate a half-life in seconds against bounds and optional zero sentinel."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return error_key
+    if allow_zero and value == zero_sentinel:
+        return None
+    if value < min_seconds or value > max_seconds:
+        return error_key
+    return None
+
+
 def validate_decay_half_life(value: Any) -> str | None:
     """Validate a decay half-life in seconds.
 
@@ -276,11 +322,41 @@ def validate_decay_half_life(value: Any) -> str | None:
     Returns:
         ``None`` when valid, otherwise the ``strings.json`` error key.
     """
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return "invalid_decay_half_life"
-    if value != 0 and (value < DECAY_HALF_LIFE_MIN or value > DECAY_HALF_LIFE_MAX):
-        return "invalid_decay_half_life"
-    return None
+    return _validate_half_life_bounds(
+        value,
+        min_seconds=DECAY_HALF_LIFE_MIN,
+        max_seconds=DECAY_HALF_LIFE_MAX,
+        allow_zero=True,
+        zero_sentinel=DEFAULT_DECAY_HALF_LIFE,
+        error_key=ERROR_INVALID_DECAY_HALF_LIFE,
+    )
+
+
+def validate_sleep_decay_half_life(
+    value: Any, *, allow_zero: bool = True
+) -> str | None:
+    """Validate a sleep presence decay half-life in seconds.
+
+    When ``allow_zero`` is True (per-area override), ``0`` means "use the
+    global default" and is valid. Any other value must fall inside
+    ``[SLEEP_DECAY_HALF_LIFE_MIN, SLEEP_DECAY_HALF_LIFE_MAX]``.
+
+    Returns:
+        ``None`` when valid, otherwise the ``strings.json`` error key.
+    """
+    error_key = (
+        ERROR_INVALID_SLEEP_DECAY_HALF_LIFE
+        if allow_zero
+        else ERROR_INVALID_GLOBAL_SLEEP_DECAY_HALF_LIFE
+    )
+    return _validate_half_life_bounds(
+        value,
+        min_seconds=SLEEP_DECAY_HALF_LIFE_MIN,
+        max_seconds=SLEEP_DECAY_HALF_LIFE_MAX,
+        allow_zero=allow_zero,
+        zero_sentinel=DEFAULT_SLEEP_DECAY_HALF_LIFE,
+        error_key=error_key,
+    )
 
 
 def validate_button_pulse_duration(value: Any) -> str | None:
@@ -373,6 +449,11 @@ def validate_area_config(data: dict[str, Any]) -> dict[str, str]:
         half_life = data.get(CONF_DECAY_HALF_LIFE, DEFAULT_DECAY_HALF_LIFE)
         if error := validate_decay_half_life(half_life):
             errors[CONF_DECAY_HALF_LIFE] = error
+        sleep_half_life = data.get(
+            CONF_SLEEP_DECAY_HALF_LIFE, DEFAULT_SLEEP_DECAY_HALF_LIFE
+        )
+        if error := validate_sleep_decay_half_life(sleep_half_life, allow_zero=True):
+            errors[CONF_SLEEP_DECAY_HALF_LIFE] = error
 
     if CONF_BUTTON_PULSE_DURATION in data and (
         error := validate_button_pulse_duration(data[CONF_BUTTON_PULSE_DURATION])
@@ -432,28 +513,234 @@ def validate_person_input(user_input: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_purpose_based_decay_default(
-    flattened_input: dict[str, Any], purpose: str | None
+    flattened_input: dict[str, Any],
+    purpose: str | None,
+    purpose_overrides: Mapping[str, int | float] | None = None,
 ) -> None:
     """Normalise the decay half-life against the selected purpose.
 
-    If decay half-life is not set or matches the *selected* purpose's default,
-    store ``0`` ("use purpose value") so the area follows the purpose across
-    later purpose changes. Any other custom value is preserved (#439/#440).
+    If decay half-life is not set or matches the *selected* purpose's effective
+    default (including any global override), store ``0`` ("use purpose value")
+    so the area follows the purpose across later purpose or global default
+    changes. Any other custom value is preserved (#439/#440).
     Modifies ``flattened_input`` in place.
 
     Args:
         flattened_input: Flattened configuration dictionary
         purpose: Selected purpose value
+        purpose_overrides: Optional global per-purpose half-life overrides
     """
     if not purpose:
         return
 
+    from .data.purpose import Purpose  # noqa: PLC0415
+
     user_set_decay = flattened_input.get(CONF_DECAY_HALF_LIFE)
-    if user_set_decay is None or Purpose.is_purpose_half_life(user_set_decay, purpose):
-        flattened_input[CONF_DECAY_HALF_LIFE] = 0
+    if user_set_decay is None or Purpose.is_purpose_half_life(
+        user_set_decay, purpose, purpose_overrides
+    ):
+        flattened_input[CONF_DECAY_HALF_LIFE] = DEFAULT_DECAY_HALF_LIFE
+
+
+# ── Global decay & tri-state option helpers ─────────────────────────
+
+
+def parse_positive_int(value: Any) -> int | None:
+    """Coerce ``value`` to a positive integer, rejecting booleans and invalid values."""
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def parse_global_sleep_decay_half_life(options: Mapping[str, Any] | None) -> int:
+    """Return the global sleep presence decay half-life in seconds."""
+    if not options:
+        return SLEEP_PRESENCE_HALF_LIFE
+    parsed = parse_positive_int(options.get(CONF_SLEEP_DECAY_HALF_LIFE))
+    return parsed if parsed is not None else SLEEP_PRESENCE_HALF_LIFE
+
+
+def parse_global_purpose_decay_half_lives(
+    options: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    """Return validated global per-purpose decay half-life overrides in seconds."""
+    if not options:
+        return {}
+    raw = options.get(CONF_PURPOSE_DECAY_HALF_LIVES)
+    if not isinstance(raw, Mapping):
+        return {}
+    overrides: dict[str, int] = {}
+    for purpose_key, half_life in cast("Mapping[Any, Any]", raw).items():
+        if not isinstance(purpose_key, str):
+            continue
+        if (seconds := parse_positive_int(half_life)) is not None:
+            overrides[purpose_key] = seconds
+    return overrides
+
+
+def get_purpose_decay_overrides(coordinator: Any) -> dict[str, int] | None:
+    """Return global per-purpose decay overrides from a coordinator, if valid."""
+    integration_config = getattr(coordinator, "integration_config", None)
+    overrides = getattr(integration_config, "purpose_decay_half_lives", None)
+    if not isinstance(overrides, Mapping):
+        return None
+    return {
+        k: v
+        for k, v in cast("Mapping[Any, Any]", overrides).items()
+        if isinstance(k, str) and isinstance(v, int)
+    }
+
+
+def get_global_sleep_decay_half_life(coordinator: Any) -> int:
+    """Return the resolved global sleep decay half-life from a coordinator."""
+    integration_config = getattr(coordinator, "integration_config", None)
+    raw = getattr(integration_config, "sleep_decay_half_life", None)
+    parsed = parse_positive_int(raw)
+    return parsed if parsed is not None else SLEEP_PRESENCE_HALF_LIFE
+
+
+def resolve_decay_half_life(
+    configured_half_life: float,
+    purpose: str | None,
+    coordinator: Any,
+) -> float:
+    """Resolve an area's configured decay half-life, expanding ``0`` via purpose and overrides."""
+    if configured_half_life == DEFAULT_DECAY_HALF_LIFE:
+        from .data.purpose import get_default_decay_half_life  # noqa: PLC0415
+
+        return get_default_decay_half_life(
+            purpose, get_purpose_decay_overrides(coordinator)
+        )
+    return float(configured_half_life)
+
+
+def resolve_sleep_decay_half_life(area_value: Any, coordinator: Any) -> int:
+    """Resolve an area's sleep decay half-life, falling back to the global default."""
+    area_sleep_half_life = parse_positive_int(area_value)
+    if area_sleep_half_life is not None:
+        return area_sleep_half_life
+    return get_global_sleep_decay_half_life(coordinator)
+
+
+def _normalize_tri_state_mode(
+    value: Any,
+    enum_cls: type[_ModeT],
+    *,
+    true_mode: _ModeT,
+    false_mode: _ModeT,
+    default: _ModeT,
+) -> _ModeT:
+    """Normalize a legacy boolean or enum string into ``enum_cls``."""
+    if value is True:
+        return true_mode
+    if value is False:
+        return false_mode
+    if isinstance(value, str):
+        try:
+            return enum_cls(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _resolve_tri_state_enabled(
+    area_setting: bool | str,
+    global_setting: Any,
+    *,
+    enable_mode: StrEnum,
+    disable_mode: StrEnum,
+    follow_mode: StrEnum,
+    setting_name: str,
+    require_bool_global: bool = False,
+) -> bool:
+    """Resolve a tri-state area override against a global boolean default."""
+    if area_setting is True or area_setting == enable_mode:
+        return True
+    if area_setting is False or area_setting == disable_mode:
+        return False
+    if area_setting == follow_mode:
+        if require_bool_global and not isinstance(global_setting, bool):
+            raise ValueError(
+                f"Invalid global {setting_name} setting: {global_setting!r}"
+            )
+        return bool(global_setting)
+    raise ValueError(f"Invalid {setting_name} setting: {area_setting!r}")
+
+
+def normalize_exclusion_mode(
+    value: Any,
+    *,
+    default: ExclusionMode = DEFAULT_AREA_EXCLUSION_SETTING,
+    legacy_false: ExclusionMode = ExclusionMode.INCLUDE,
+) -> ExclusionMode:
+    """Normalize a stored exclusion setting (legacy bool or enum string) to ``ExclusionMode``."""
+    return _normalize_tri_state_mode(
+        value,
+        ExclusionMode,
+        true_mode=ExclusionMode.EXCLUDE,
+        false_mode=legacy_false,
+        default=default,
+    )
+
+
+def resolve_exclusion_enabled(
+    area_setting: bool | str,
+    global_setting: Any,
+    *,
+    setting_name: str = _DEFAULT_EXCLUSION_SETTING_LABEL,
+) -> bool:
+    """Resolve an area exclusion override against the global boolean default."""
+    return _resolve_tri_state_enabled(
+        area_setting,
+        global_setting,
+        enable_mode=ExclusionMode.EXCLUDE,
+        disable_mode=ExclusionMode.INCLUDE,
+        follow_mode=ExclusionMode.FOLLOW_GLOBAL,
+        setting_name=setting_name,
+        require_bool_global=False,
+    )
+
+
+def normalize_group_expansion_mode(
+    value: Any,
+    *,
+    default: GroupExpansionMode = DEFAULT_AREA_EXPAND_GROUPS,
+) -> GroupExpansionMode:
+    """Normalize a stored group-expansion setting (legacy bool or enum string) to ``GroupExpansionMode``."""
+    return _normalize_tri_state_mode(
+        value,
+        GroupExpansionMode,
+        true_mode=GroupExpansionMode.EXPAND,
+        false_mode=GroupExpansionMode.KEEP,
+        default=default,
+    )
+
+
+def resolve_group_expansion_enabled(
+    area_setting: bool | str, global_setting: Any
+) -> bool:
+    """Resolve an area group-expansion override against the global boolean default."""
+    return _resolve_tri_state_enabled(
+        area_setting,
+        global_setting,
+        enable_mode=GroupExpansionMode.EXPAND,
+        disable_mode=GroupExpansionMode.KEEP,
+        follow_mode=GroupExpansionMode.FOLLOW_GLOBAL,
+        setting_name=GROUP_EXPANSION_SETTING_LABEL,
+        require_bool_global=True,
+    )
 
 
 # ── Area list transforms ─────────────────────────────────────────────
+
+
+def is_active_config_entry(entry: Any) -> bool:
+    """Return True when a config entry is active (not an ignored discovery entry)."""
+    return getattr(entry, "source", None) != SOURCE_IGNORE
 
 
 def iter_area_subentries(entry: Any) -> list[tuple[str, dict[str, Any]]]:

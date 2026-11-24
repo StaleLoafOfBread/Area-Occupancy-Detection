@@ -13,7 +13,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.util import dt as dt_util
 
-from ..config_helpers import find_area_subentry_id, iter_area_subentries
+from ..config_helpers import (
+    find_area_subentry_id,
+    iter_area_subentries,
+    parse_global_purpose_decay_half_lives,
+    parse_global_sleep_decay_half_life,
+    resolve_decay_half_life,
+    resolve_sleep_decay_half_life,
+)
 from ..const import (
     ANALYSIS_INTERVAL,
     CONF_ADJACENT_AREAS,
@@ -64,6 +71,7 @@ from ..const import (
     CONF_PRESSURE_SENSORS,
     CONF_PURPOSE,
     CONF_SENSOR_PRECISION,
+    CONF_SLEEP_DECAY_HALF_LIFE,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
     CONF_SOUND_PRESSURE_SENSORS,
@@ -111,6 +119,7 @@ from ..const import (
     DEFAULT_PURPOSE,
     DEFAULT_SENSOR_PRECISION,
     DEFAULT_SLEEP_CONFIDENCE_THRESHOLD,
+    DEFAULT_SLEEP_DECAY_HALF_LIFE,
     DEFAULT_SLEEP_END,
     DEFAULT_SLEEP_START,
     DEFAULT_THRESHOLD,
@@ -134,7 +143,7 @@ from ..const import (
     DEFAULT_WINDOW_ACTIVE_STATE,
     HA_RECORDER_DAYS,
 )
-from .purpose import get_default_decay_half_life
+from ..discovery import resolve_area_sensors
 
 if TYPE_CHECKING:
     from ..coordinator import AreaOccupancyCoordinator
@@ -211,6 +220,16 @@ class IntegrationConfig:
     def sleep_end(self) -> str:
         """Get sleep end time from config entry options."""
         return self.config_entry.options.get(CONF_SLEEP_END, DEFAULT_SLEEP_END)
+
+    @property
+    def sleep_decay_half_life(self) -> int:
+        """Get global sleep presence decay half-life in seconds."""
+        return parse_global_sleep_decay_half_life(self.config_entry.options)
+
+    @property
+    def purpose_decay_half_lives(self) -> dict[str, int]:
+        """Get global per-purpose decay half-life overrides in seconds."""
+        return parse_global_purpose_decay_half_lives(self.config_entry.options)
 
     @property
     def health_enabled(self) -> bool:
@@ -464,6 +483,7 @@ class DecayConfig:
 
     enabled: bool = DEFAULT_DECAY_ENABLED
     half_life: int = DEFAULT_DECAY_HALF_LIFE
+    sleep_half_life: int = DEFAULT_SLEEP_DECAY_HALF_LIFE
 
 
 @dataclass
@@ -532,6 +552,14 @@ class AreaConfig:
             data: Dictionary containing merged config entry data and options
 
         """
+        data = resolve_area_sensors(
+            self.hass,
+            data,
+            entry.options
+            if (entry := getattr(self, "config_entry", None)) is not None
+            else None,
+        )
+
         # Validate threshold range
         threshold = float(data.get(CONF_THRESHOLD, DEFAULT_THRESHOLD)) / 100.0
 
@@ -669,12 +697,23 @@ class AreaConfig:
         )
 
         # Resolve half-life: if 0 or not set, use purpose-based value
-        half_life_value = int(data.get(CONF_DECAY_HALF_LIFE, DEFAULT_DECAY_HALF_LIFE))
-        if half_life_value == 0:
-            half_life_value = int(get_default_decay_half_life(self.purpose))
+        half_life_value = int(
+            resolve_decay_half_life(
+                int(data.get(CONF_DECAY_HALF_LIFE, DEFAULT_DECAY_HALF_LIFE)),
+                self.purpose,
+                self.coordinator,
+            )
+        )
+
+        # Resolve sleep presence half-life: if 0 or not set, use global default
+        sleep_half_life_value = resolve_sleep_decay_half_life(
+            data.get(CONF_SLEEP_DECAY_HALF_LIFE, DEFAULT_SLEEP_DECAY_HALF_LIFE),
+            self.coordinator,
+        )
 
         self.decay = DecayConfig(
             half_life=half_life_value,
+            sleep_half_life=sleep_half_life_value,
             enabled=bool(data.get(CONF_DECAY_ENABLED, DEFAULT_DECAY_ENABLED)),
         )
 

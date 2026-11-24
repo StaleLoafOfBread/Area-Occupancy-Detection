@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
+import math
+from typing import Final
 
 from homeassistant.util import dt as dt_util
 
@@ -12,6 +14,11 @@ from ..time_utils import to_local, to_utc
 from .purpose import Purpose
 
 _LOGGER = logging.getLogger(__name__)
+
+# Practical decay cutoff: factors below this snap to 0.0 so decay finishes cleanly.
+DECAY_PRACTICAL_FLOOR: Final[float] = 0.05
+# Half-lives until 0.5 ** n drops to DECAY_PRACTICAL_FLOOR (~4.3219 half-lives).
+_DECAY_EXPIRY_HALF_LIVES: Final[float] = math.log2(1.0 / DECAY_PRACTICAL_FLOOR)
 
 
 class Decay:
@@ -168,6 +175,40 @@ class Decay:
         # Outside sleep window, use the purpose's awake half-life
         return self._purpose.awake_half_life
 
+    def decay_factor_at(self, at: datetime, *, warn_invalid: bool = False) -> float:
+        """Return the decay factor at ``at`` without mutating state.
+
+        Returns:
+            1.0 if not decaying or ``at`` is before ``decay_start``
+            0.0 if half_life is invalid (zero or negative) or factor drops
+                below ``DECAY_PRACTICAL_FLOOR``
+            Calculated factor otherwise (``DECAY_PRACTICAL_FLOOR`` to 1.0)
+        """
+        if not self.is_decaying:
+            return 1.0
+
+        age = (to_utc(at) - self.decay_start).total_seconds()
+
+        # Handle negative age (decay_start in future) - no decay has occurred yet
+        if age < 0:
+            return 1.0
+
+        # Handle zero or negative half_life - prevent division by zero
+        half_life = self.half_life
+        if half_life <= 0:
+            if warn_invalid:
+                _LOGGER.warning(
+                    "Invalid half_life value %s detected, treating as immediate decay",
+                    half_life,
+                )
+            return 0.0
+
+        factor = float(0.5 ** (age / half_life))
+        # Return 0.0 when factor drops below practical threshold
+        if factor < DECAY_PRACTICAL_FLOOR:
+            return 0.0
+        return factor
+
     @property
     def decay_factor(self) -> float:
         """Freshness of last motion edge ∈[0,1].
@@ -181,28 +222,18 @@ class Decay:
             0.0 if half_life is invalid (zero or negative)
             Calculated factor otherwise (0.0 to 1.0)
         """
+        return self.decay_factor_at(dt_util.utcnow(), warn_invalid=True)
+
+    def expires_at(self) -> datetime | None:
+        """Return the UTC timestamp when this decay reaches 0.0, or None if inactive."""
         if not self.is_decaying:
-            return 1.0
-
-        age = (dt_util.utcnow() - self.decay_start).total_seconds()
-
-        # Handle negative age (decay_start in future) - no decay has occurred yet
-        if age < 0:
-            return 1.0
-
-        # Handle zero or negative half_life - prevent division by zero
-        if self.half_life <= 0:
-            _LOGGER.warning(
-                "Invalid half_life value %s detected, treating as immediate decay",
-                self.half_life,
-            )
-            return 0.0
-
-        factor = float(0.5 ** (age / self.half_life))
-        # Return 0.0 when factor drops below practical threshold
-        if factor < 0.05:
-            return 0.0
-        return factor
+            return None
+        half_life = self.half_life
+        if half_life <= 0:
+            return self.decay_start
+        return self.decay_start + timedelta(
+            seconds=half_life * _DECAY_EXPIRY_HALF_LIVES
+        )
 
     def tick(self) -> float:
         """Update decay state and return current decay factor.

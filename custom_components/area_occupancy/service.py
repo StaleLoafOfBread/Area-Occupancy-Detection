@@ -17,7 +17,9 @@ from homeassistant.util import dt as dt_util
 
 from .config_helpers import (
     apply_purpose_based_decay_default,
+    get_purpose_decay_overrides,
     iter_area_subentries,
+    resolve_decay_half_life,
     validate_area_config,
 )
 from .const import (
@@ -37,7 +39,7 @@ from .const import (
 )
 from .data.forecast import build_aggregate_time_priors, build_area_time_priors
 from .data.prior import DEFAULT_SLOT_MINUTES, PRIOR_FACTOR
-from .data.purpose import get_default_decay_half_life
+from .discovery import resolve_area_sensors
 from .utils import get_coordinator
 
 if TYPE_CHECKING:
@@ -212,9 +214,9 @@ def _build_analysis_data(
     likelihood_data = _collect_likelihood_data(area)
 
     # Resolve half_life: use configured value, or derive from purpose if set to auto (0)
-    half_life = area.config.decay.half_life
-    if half_life == 0:
-        half_life = get_default_decay_half_life(area.config.purpose)
+    half_life = resolve_decay_half_life(
+        area.config.decay.half_life, area.config.purpose, area.coordinator
+    )
 
     data = {
         "area_name": area_name,
@@ -571,10 +573,14 @@ async def _set_area_option(hass: HomeAssistant, call: ServiceCall) -> dict[str, 
     # before saving), so the requested changes merge straight over it.
     candidate = {**dict(subentry.data), **requested}
     apply_purpose_based_decay_default(
-        candidate, candidate.get(CONF_PURPOSE, DEFAULT_PURPOSE)
+        candidate,
+        candidate.get(CONF_PURPOSE, DEFAULT_PURPOSE),
+        get_purpose_decay_overrides(coordinator),
     )
 
-    if errors := validate_area_config(candidate):
+    if errors := validate_area_config(
+        resolve_area_sensors(hass, candidate, coordinator.config_entry.options)
+    ):
         raise ServiceValidationError(
             f"Invalid configuration for area '{area_name}': "
             + ", ".join(f"{field}={reason}" for field, reason in sorted(errors.items()))

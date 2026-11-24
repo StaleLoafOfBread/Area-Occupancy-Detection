@@ -8,32 +8,49 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
 from custom_components.area_occupancy.config_flow import (
     AREA_EDIT_SPOKES,
+    AUTO_ADDED_ENTITIES_FIELD,
+    AUTO_ADDED_FIELD_PREFIX,
+    AUTO_ADDED_SECTION,
+    EXPLICIT_SECTION,
+    SECTION_AREA_EXCLUSIONS,
+    SECTION_AUTO_DISCOVERY_TYPES,
+    SECTION_GLOBAL_DEVICES,
+    SECTION_GLOBAL_ENTITIES,
+    SECTION_GLOBAL_INTEGRATIONS,
+    SECTION_GLOBAL_SENSOR_TYPES,
     SENSOR_GROUPS,
     AreaOccupancyConfigFlow,
     AreaOccupancyOptionsFlow,
     AreaSubentryFlowHandler,
     BaseOccupancyFlow,
+    _auto_added_sensor_ids,
     _build_area_description_placeholders,
     _create_area_selector_schema,
     _create_basics_step_schema,
     _create_behavior_step_schema,
-    _create_global_settings_schema,
+    _create_global_exclusions_schema,
+    _create_global_general_schema,
     _create_motion_step_schema,
     _create_sensors_step_schema,
     _entity_contains_keyword,
+    _explicit_sensor_config,
     _find_area_by_sanitized_id,
     _format_seconds,
     _get_area_summary_info,
+    _get_excluded_integration_options,
     _get_include_entities,
     _get_purpose_display_name,
     _get_state_select_options,
     _handle_step_error,
     _is_weather_entity,
     _nest_config_for_sections,
+    _normalize_basics_submission,
+    _sync_discovered_and_excluded,
 )
 from custom_components.area_occupancy.config_helpers import (
     apply_purpose_based_decay_default,
@@ -49,6 +66,9 @@ from custom_components.area_occupancy.const import (
     CONF_APPLIANCE_ACTIVE_STATES,
     CONF_APPLIANCES,
     CONF_AREA_ID,
+    CONF_AUTO_ADDED_SENSORS,
+    CONF_AUTO_DISCOVER_DOMAINS,
+    CONF_AUTO_DISCOVER_SENSORS,
     CONF_AWAY_MODE_ENTITY,
     CONF_CUSTOM_BINARY_ACTIVE_STATES,
     CONF_CUSTOM_BINARY_SENSORS,
@@ -60,6 +80,16 @@ from custom_components.area_occupancy.const import (
     CONF_DOOR_ACTIVE_STATE,
     CONF_DOOR_SENSORS,
     CONF_EXCLUDE_FROM_ALL_AREAS,
+    CONF_EXCLUDE_LIGHT_POWER,
+    CONF_EXCLUDE_OCCUPANCY_SUBZONES,
+    CONF_EXCLUDE_REMOTE_LOCKS,
+    CONF_EXCLUDE_VEHICLE_DETECTED,
+    CONF_EXCLUDED_INTEGRATIONS,
+    CONF_EXCLUDED_MANUFACTURERS,
+    CONF_EXCLUDED_MODELS,
+    CONF_EXCLUDED_SENSOR_TYPES,
+    CONF_EXCLUDED_SENSORS,
+    CONF_EXPAND_GROUPS,
     CONF_ILLUMINANCE_SENSORS,
     CONF_LOCK_ACTIVE_STATE,
     CONF_LOCK_SENSORS,
@@ -71,6 +101,7 @@ from custom_components.area_occupancy.const import (
     CONF_MOTION_SENSORS,
     CONF_MOTION_TIMEOUT,
     CONF_OPTION_PREFIX_AREA,
+    CONF_POWER_SENSORS,
     CONF_PURPOSE,
     CONF_SLEEP_END,
     CONF_SLEEP_START,
@@ -80,19 +111,31 @@ from custom_components.area_occupancy.const import (
     CONF_WEIGHT_CUSTOM_NUMERIC,
     CONF_WEIGHT_MEDIA,
     CONF_WEIGHT_MOTION,
+    CONF_WEIGHT_POWER,
     CONF_WEIGHT_WIFI_CLIENTS,
     CONF_WIFI_CLIENTS_SENSORS,
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
+    DEFAULT_AREA_EXCLUSION_SETTING,
+    DEFAULT_GLOBAL_EXPAND_GROUPS,
     DEFAULT_PURPOSE,
     DOMAIN,
+    SENSOR_KEY_TO_TYPE_SLUG,
     SUBENTRY_TYPE_AREA,
+    ExclusionMode,
+    GroupExpansionMode,
 )
+from custom_components.area_occupancy.data.purpose import infer_purpose_from_name
 from custom_components.area_occupancy.preview import PREVIEW_COMPONENT, PREVIEW_DATA_KEY
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import (
+    SOURCE_INTEGRATION_DISCOVERY,
+    ConfigEntry,
+    ConfigSubentry,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar, entity_registry as er
 from tests.conftest import create_area_config
 
 
@@ -995,7 +1038,13 @@ class TestHelperFunctions:
         def field_names(schema_dict):
             return {getattr(key, "schema", None) for key in schema_dict}
 
-        motion_fields = field_names(_create_motion_step_schema(hass))
+        motion_schema = _create_motion_step_schema(hass)
+        explicit_motion = next(
+            value
+            for marker, value in motion_schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        motion_fields = field_names(explicit_motion.schema.schema)
         assert CONF_MOTION_PROB_GIVEN_TRUE in motion_fields
         assert CONF_MOTION_PROB_GIVEN_FALSE in motion_fields
 
@@ -1559,7 +1608,7 @@ GLOBAL_SETTINGS_INPUT = {CONF_SLEEP_START: "23:00:00", CONF_SLEEP_END: "07:00:00
 
 
 class TestGlobalSettingsAwayModeEntity:
-    """The away mode entity field of the global settings schema."""
+    """The away mode entity field of the global general settings schema."""
 
     @pytest.mark.parametrize(
         "entity_id",
@@ -1567,9 +1616,7 @@ class TestGlobalSettingsAwayModeEntity:
     )
     def test_accepts_boolean_entities(self, entity_id: str) -> None:
         """Toggles, binary sensors and switches can all say the household is away."""
-        result = _create_global_settings_schema({})(
-            {**GLOBAL_SETTINGS_INPUT, CONF_AWAY_MODE_ENTITY: entity_id}
-        )
+        result = _create_global_general_schema({})({CONF_AWAY_MODE_ENTITY: entity_id})
 
         assert result[CONF_AWAY_MODE_ENTITY] == entity_id
 
@@ -1579,15 +1626,54 @@ class TestGlobalSettingsAwayModeEntity:
     def test_rejects_other_entities(self, entity_id: str) -> None:
         """Only entities with an on/off state can be chosen."""
         with pytest.raises(vol.Invalid):
-            _create_global_settings_schema({})(
-                {**GLOBAL_SETTINGS_INPUT, CONF_AWAY_MODE_ENTITY: entity_id}
-            )
+            _create_global_general_schema({})({CONF_AWAY_MODE_ENTITY: entity_id})
 
     def test_is_optional(self) -> None:
         """Leaving it out is valid and stores nothing: person tracking decides."""
-        result = _create_global_settings_schema({})(GLOBAL_SETTINGS_INPUT)
+        result = _create_global_general_schema({})({})
 
         assert CONF_AWAY_MODE_ENTITY not in result
+        assert CONF_EXCLUDED_MANUFACTURERS not in result
+        assert CONF_EXCLUDED_MODELS not in result
+
+
+class TestGlobalExclusions:
+    """Global and area settings expose the same exclusion controls."""
+
+    def test_global_exclusions_match_area_exclusion_fields(self) -> None:
+        shared_exclusions = {
+            CONF_EXCLUDE_LIGHT_POWER,
+            CONF_EXCLUDE_OCCUPANCY_SUBZONES,
+            CONF_EXCLUDE_REMOTE_LOCKS,
+            CONF_EXCLUDE_VEHICLE_DETECTED,
+            CONF_EXCLUDED_MANUFACTURERS,
+            CONF_EXCLUDED_MODELS,
+            CONF_EXCLUDED_INTEGRATIONS,
+            CONF_EXCLUDED_SENSORS,
+        }
+        global_schema = _create_global_exclusions_schema({}).schema
+        global_fields = {
+            str(field)
+            for sec_obj in global_schema.values()
+            for field in sec_obj.schema.schema
+        }
+        area_schema = _create_basics_step_schema(is_editing=True)
+        area_fields = {str(key) for key in area_schema if str(key) in shared_exclusions}
+        area_section = area_schema[SECTION_AREA_EXCLUSIONS].schema.schema
+        area_fields.update(str(key) for key in area_section)
+
+        assert area_fields == shared_exclusions
+        assert global_fields == shared_exclusions | {CONF_EXCLUDED_SENSOR_TYPES}
+
+
+class TestGlobalGroupExpansion:
+    """Group expansion can be configured globally."""
+
+    def test_global_group_expansion_is_enabled_by_default(self) -> None:
+        schema = _create_global_general_schema({})
+        marker = next(key for key in schema.schema if str(key) == CONF_EXPAND_GROUPS)
+
+        assert marker.default() is DEFAULT_GLOBAL_EXPAND_GROUPS
 
 
 class TestAreaOccupancyOptionsFlow:
@@ -1635,38 +1721,123 @@ class TestAreaOccupancyOptionsFlow:
             },
         )
 
-        # Update global settings
-        user_input = {
-            CONF_SLEEP_START: "23:00:00",
-            CONF_SLEEP_END: "08:00:00",
-            CONF_SENSOR_PRECISION: 1.0,  # Float value to test vol.Coerce(int)
-        }
+        # Global settings opens a grouped menu
+        menu_result = await flow.async_step_global_settings()
+        assert menu_result["type"] == FlowResultType.MENU
+        assert menu_result["step_id"] == "global_settings"
+        assert menu_result["menu_options"] == [
+            "global_sleep",
+            "global_purpose_decay",
+            "global_general",
+            "global_exclusions",
+        ]
 
-        result = await flow.async_step_global_settings(user_input)
-        assert result["type"] == FlowResultType.CREATE_ENTRY
+        # Update sleep settings
+        sleep_result = await flow.async_step_global_sleep(
+            {
+                CONF_SLEEP_START: "23:00:00",
+                CONF_SLEEP_END: "08:00:00",
+            }
+        )
+        assert sleep_result["type"] == FlowResultType.CREATE_ENTRY
+        assert sleep_result["data"][CONF_SLEEP_START] == "23:00:00"
+        assert sleep_result["data"][CONF_SLEEP_END] == "08:00:00"
 
-        # Verify settings were saved
-        result_data = result["data"]
-        assert result_data[CONF_SLEEP_START] == "23:00:00"
-        assert result_data[CONF_SLEEP_END] == "08:00:00"
-        assert result_data[CONF_SENSOR_PRECISION] == 1
-        assert isinstance(result_data[CONF_SENSOR_PRECISION], int)
+        # Update general settings
+        general_result = await flow.async_step_global_general(
+            {
+                CONF_SENSOR_PRECISION: 1.0,  # Float value to test vol.Coerce(int)
+            }
+        )
+        assert general_result["type"] == FlowResultType.CREATE_ENTRY
+        assert general_result["data"][CONF_SENSOR_PRECISION] == 1
+        assert isinstance(general_result["data"][CONF_SENSOR_PRECISION], int)
 
     async def test_options_flow_global_settings_save_away_mode_entity(
         self,
         config_flow_options_flow,
         config_flow_mock_config_entry_with_areas,
     ):
-        """An away mode entity chosen in global settings is stored in the options."""
+        """An away mode entity chosen in global general settings is stored in the options."""
         flow = config_flow_options_flow
         flow.config_entry = config_flow_mock_config_entry_with_areas
 
-        result = await flow.async_step_global_settings(
-            {**GLOBAL_SETTINGS_INPUT, CONF_AWAY_MODE_ENTITY: "input_boolean.vacation"}
+        result = await flow.async_step_global_general(
+            {CONF_AWAY_MODE_ENTITY: "input_boolean.vacation"}
         )
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_AWAY_MODE_ENTITY] == "input_boolean.vacation"
+
+    async def test_options_flow_global_settings_save_discovery_exclusions(
+        self,
+        config_flow_options_flow,
+        config_flow_mock_config_entry_with_areas,
+    ):
+        """Global discovery exclusions are saved in entry options."""
+        flow = config_flow_options_flow
+        flow.config_entry = config_flow_mock_config_entry_with_areas
+        user_input = {
+            SECTION_GLOBAL_SENSOR_TYPES: {
+                CONF_EXCLUDED_SENSOR_TYPES: [],
+            },
+            SECTION_GLOBAL_DEVICES: {
+                CONF_EXCLUDED_MANUFACTURERS: ["ratgdo"],
+                CONF_EXCLUDED_MODELS: ["opener"],
+                CONF_EXCLUDE_LIGHT_POWER: True,
+            },
+            SECTION_GLOBAL_ENTITIES: {
+                CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
+            },
+            SECTION_GLOBAL_INTEGRATIONS: {
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
+            },
+        }
+
+        result = await flow.async_step_global_exclusions(user_input)
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is True
+        assert result["data"][CONF_EXCLUDED_MANUFACTURERS] == ["ratgdo"]
+        assert result["data"][CONF_EXCLUDED_MODELS] == ["opener"]
+        assert result["data"][CONF_EXCLUDED_SENSORS] == ["sensor.garage_power"]
+        assert result["data"][CONF_EXCLUDED_INTEGRATIONS] == ["powercalc:light"]
+
+    async def test_options_flow_global_settings_clear_discovery_exclusions(
+        self,
+        hass: HomeAssistant,
+        config_flow_options_flow,
+        config_flow_mock_config_entry_with_areas,
+    ):
+        """Clearing global discovery exclusions removes their saved values."""
+        flow = config_flow_options_flow
+        flow.config_entry = config_flow_mock_config_entry_with_areas
+        hass.config_entries.async_update_entry(
+            flow.config_entry,
+            options={
+                CONF_EXCLUDE_LIGHT_POWER: True,
+                CONF_EXCLUDED_SENSORS: ["sensor.garage_power"],
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc:light"],
+            },
+        )
+
+        result = await flow.async_step_global_exclusions(
+            {
+                SECTION_GLOBAL_SENSOR_TYPES: {CONF_EXCLUDED_SENSOR_TYPES: []},
+                SECTION_GLOBAL_DEVICES: {
+                    CONF_EXCLUDE_LIGHT_POWER: False,
+                    CONF_EXCLUDED_MANUFACTURERS: [],
+                    CONF_EXCLUDED_MODELS: [],
+                },
+                SECTION_GLOBAL_ENTITIES: {CONF_EXCLUDED_SENSORS: []},
+                SECTION_GLOBAL_INTEGRATIONS: {CONF_EXCLUDED_INTEGRATIONS: []},
+            }
+        )
+
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+        assert result["data"][CONF_EXCLUDE_LIGHT_POWER] is False
+        assert result["data"][CONF_EXCLUDED_SENSORS] == []
+        assert result["data"][CONF_EXCLUDED_INTEGRATIONS] == []
 
     async def test_options_flow_global_settings_clears_away_mode_entity(
         self,
@@ -1689,7 +1860,7 @@ class TestAreaOccupancyOptionsFlow:
             },
         )
 
-        result = await flow.async_step_global_settings(GLOBAL_SETTINGS_INPUT)
+        result = await flow.async_step_global_general({})
 
         assert result["type"] == FlowResultType.CREATE_ENTRY
         assert CONF_AWAY_MODE_ENTITY not in result["data"]
@@ -1714,7 +1885,7 @@ class TestAreaOccupancyOptionsFlow:
             return field.description["suggested_value"]
 
         hass.config_entries.async_update_entry(flow.config_entry, options={})
-        result = await flow.async_step_global_settings()
+        result = await flow.async_step_global_general()
         assert result["type"] == FlowResultType.FORM
         assert suggested(result) is None
 
@@ -1722,7 +1893,7 @@ class TestAreaOccupancyOptionsFlow:
             flow.config_entry,
             options={CONF_AWAY_MODE_ENTITY: "input_boolean.vacation"},
         )
-        result = await flow.async_step_global_settings()
+        result = await flow.async_step_global_general()
         assert suggested(result) == "input_boolean.vacation"
 
     async def test_options_flow_area_action_menu_includes_reset_learning(
@@ -2039,13 +2210,16 @@ class TestNewHelperFunctions:
             CONF_WEIGHT_WIFI_CLIENTS: 0.42,
         }
 
-    def test_sensors_step_schema_includes_wifi_clients_section(self, hass):
-        """Test that the sensors step schema exposes a wifi_clients section."""
+    def test_sensors_step_schema_includes_wifi_clients_field(self, hass):
+        """Test that the sensors step schema exposes the Wi-Fi client field."""
         schema_dict = _create_sensors_step_schema(hass)
-        section_names = {
-            key.schema if hasattr(key, "schema") else key for key in schema_dict
-        }
-        assert "wifi_clients" in section_names
+        explicit = next(
+            value
+            for marker, value in schema_dict.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        field_names = {marker.schema for marker in explicit.schema.schema}
+        assert CONF_WIFI_CLIENTS_SENSORS in field_names
 
     def test_flatten_sectioned_input_custom(self):
         """Test flattening the custom section like other sensor sections."""
@@ -2075,13 +2249,16 @@ class TestNewHelperFunctions:
             CONF_WEIGHT_CUSTOM_NUMERIC: 0.25,
         }
 
-    def test_sensors_step_schema_includes_custom_section(self, hass):
-        """Test that the sensors step schema exposes a custom section."""
+    def test_sensors_step_schema_includes_custom_sensor_fields(self, hass):
+        """Test that the sensors step schema exposes custom sensor fields."""
         schema_dict = _create_sensors_step_schema(hass)
-        section_names = {
-            key.schema if hasattr(key, "schema") else key for key in schema_dict
-        }
-        assert "custom" in section_names
+        explicit = next(
+            value
+            for marker, value in schema_dict.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        field_names = {marker.schema for marker in explicit.schema.schema}
+        assert CONF_CUSTOM_BINARY_SENSORS in field_names
 
     @pytest.mark.parametrize(
         ("areas", "search_name", "expected_found", "expected_name"),
@@ -2518,12 +2695,18 @@ class TestSectionEditing:
         assert schema({}) == {
             CONF_PURPOSE: "sleeping",
             CONF_ADJACENT_AREAS: ["kitchen"],
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: [],
         }
 
     def test_basics_defaults_stay_generic_when_adding(self) -> None:
         schema = vol.Schema(_create_basics_step_schema(is_editing=True))
 
-        assert schema({}) == {CONF_PURPOSE: DEFAULT_PURPOSE}
+        assert schema({}) == {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: [],
+        }
 
     async def test_edit_basics_spoke_changes_purpose_and_keeps_rest(
         self, config_flow_options_flow
@@ -2601,11 +2784,18 @@ class TestSectionEditing:
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "area_sensors"
         assert result["last_step"] is True
-        assert [marker.schema for marker in result["data_schema"].schema] == ["media"]
+        explicit = next(
+            value
+            for marker, value in result["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        assert CONF_MEDIA_DEVICES in {
+            marker.schema for marker in explicit.schema.schema
+        }
 
         result = await flow.async_step_area_sensors(
             {
-                "media": {
+                EXPLICIT_SECTION: {
                     CONF_MEDIA_DEVICES: ["media_player.tv"],
                     CONF_MEDIA_ACTIVE_STATES: ["playing"],
                     CONF_WEIGHT_MEDIA: 0.7,
@@ -2646,11 +2836,22 @@ class TestSectionEditing:
 
     def test_sensors_schema_group_filter(self, hass: HomeAssistant) -> None:
         full = _create_sensors_step_schema(hass, include_entities=_empty_entities(hass))
-        assert [m.schema for m in full] == list(SENSOR_GROUPS)
+        full_explicit = next(
+            value for marker, value in full.items() if marker.schema == EXPLICIT_SECTION
+        )
+        full_fields = {marker.schema for marker in full_explicit.schema.schema}
+        assert CONF_POWER_SENSORS in full_fields
+        assert CONF_CUSTOM_BINARY_SENSORS in full_fields
         only_power = _create_sensors_step_schema(
             hass, include_entities=_empty_entities(hass), groups=("power",)
         )
-        assert [m.schema for m in only_power] == ["power"]
+        power_explicit = next(
+            value
+            for marker, value in only_power.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        power_fields = {marker.schema for marker in power_explicit.schema.schema}
+        assert power_fields == {CONF_POWER_SENSORS, CONF_WEIGHT_POWER}
 
 
 def _empty_entities(hass: HomeAssistant) -> dict[str, list[str]]:
@@ -2789,7 +2990,14 @@ class TestCustomSensorsSpoke:
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "area_sensors"
-        assert [marker.schema for marker in result["data_schema"].schema] == ["custom"]
+        explicit = next(
+            value
+            for marker, value in result["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        assert CONF_CUSTOM_BINARY_SENSORS in {
+            marker.schema for marker in explicit.schema.schema
+        }
 
     async def test_saving_entities_persists_them(
         self, config_flow_options_flow
@@ -2800,7 +3008,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_BINARY_SENSORS: ["sensor.pc"],
                     CONF_CUSTOM_BINARY_ACTIVE_STATES: ["in_use"],
                 }
@@ -2823,7 +3031,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_BINARY_SENSORS: ["sensor.pc"],
                     CONF_CUSTOM_BINARY_ACTIVE_STATES: [],
                 }
@@ -2844,7 +3052,7 @@ class TestCustomSensorsSpoke:
 
         result = await flow.async_step_area_sensors(
             {
-                "custom": {
+                EXPLICIT_SECTION: {
                     CONF_CUSTOM_NUMERIC_SENSORS: ["sensor.counter"],
                     CONF_CUSTOM_NUMERIC_ACTIVE_MIN: 10.0,
                     CONF_CUSTOM_NUMERIC_ACTIVE_MAX: 2.0,
@@ -3070,3 +3278,1038 @@ class TestAlreadyConfigured:
             )["config"]["abort"]["already_configured"]
             assert "{" not in text
             assert "Add an area" in text
+
+
+@pytest.mark.parametrize(
+    ("is_editing", "current", "expected"),
+    [
+        (False, None, True),
+        (True, {}, True),
+        (True, {CONF_AUTO_DISCOVER_SENSORS: True}, True),
+        (True, {CONF_AUTO_DISCOVER_SENSORS: False}, False),
+    ],
+)
+def test_discovery_basics_defaults(
+    is_editing: bool, current: dict[str, Any] | None, expected: bool
+) -> None:
+    schema = vol.Schema(
+        _create_basics_step_schema(is_editing=is_editing, current=current)
+    )
+    submitted = {} if is_editing else {CONF_AREA_ID: "room"}
+    assert schema(submitted)[CONF_AUTO_DISCOVER_SENSORS] is expected
+
+
+async def test_automatic_motion_satisfies_wizard(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {CONF_AREA_ID: "room", CONF_AUTO_DISCOVER_SENSORS: True}
+    with (
+        patch(
+            "custom_components.area_occupancy.config_flow.resolve_area_sensors",
+            return_value={CONF_MOTION_SENSORS: ["binary_sensor.discovered"]},
+        ),
+        patch.object(
+            flow, "async_step_area_sensors", new_callable=AsyncMock
+        ) as next_step,
+    ):
+        await flow.async_step_area_motion({CONF_MOTION_SENSORS: []})
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == []
+
+
+async def test_motion_step_separates_readonly_discovery_from_explicit_selection(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {CONF_AREA_ID: "room", CONF_AUTO_DISCOVER_SENSORS: True}
+    discovered = {
+        CONF_MOTION_SENSORS: [
+            "binary_sensor.motion_auto_1",
+            "binary_sensor.motion_auto_2",
+        ]
+    }
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            return_value=discovered,
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value=discovered,
+        ),
+    ):
+        form = await flow.async_step_area_motion()
+        assert [marker.schema for marker in form["data_schema"].schema] == [
+            AUTO_ADDED_SECTION,
+            EXPLICIT_SECTION,
+        ]
+        auto_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == AUTO_ADDED_SECTION
+        )
+        auto_marker = next(
+            marker
+            for marker in auto_section.schema.schema
+            if marker.schema == AUTO_ADDED_ENTITIES_FIELD
+        )
+        assert auto_section.schema.schema[auto_marker].config["read_only"]
+        assert auto_marker.default() == [
+            "binary_sensor.motion_auto_1",
+            "binary_sensor.motion_auto_2",
+        ]
+
+        explicit_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        motion_marker = next(
+            marker
+            for marker in explicit_section.schema.schema
+            if marker.schema == CONF_MOTION_SENSORS
+        )
+        assert motion_marker.description is None
+
+        with patch.object(
+            flow, "async_step_area_sensors", new_callable=AsyncMock
+        ) as next_step:
+            await flow.async_step_area_motion(
+                {
+                    AUTO_ADDED_SECTION: {
+                        AUTO_ADDED_ENTITIES_FIELD: "tampered value",
+                    },
+                    EXPLICIT_SECTION: {CONF_MOTION_SENSORS: []},
+                }
+            )
+
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == [
+        "binary_sensor.motion_auto_1",
+        "binary_sensor.motion_auto_2",
+    ]
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][CONF_MOTION_SENSORS] == [
+        "binary_sensor.motion_auto_1",
+        "binary_sensor.motion_auto_2",
+    ]
+
+
+def test_auto_added_entity_fields_are_omitted_when_empty(
+    hass,
+) -> None:
+    """No read-only entity picker is rendered when discovery adds nothing."""
+    motion_schema = _create_motion_step_schema(hass, auto_added_entities=[])
+    assert [marker.schema for marker in motion_schema] == [EXPLICIT_SECTION]
+
+    sensors_schema = vol.Schema(
+        _create_sensors_step_schema(
+            hass,
+            groups=("environmental",),
+            auto_added_entities={"environmental": []},
+        )
+    )
+    explicit_section = next(
+        value
+        for marker, value in sensors_schema.schema.items()
+        if marker.schema == EXPLICIT_SECTION
+    )
+    assert not any(
+        str(marker).startswith(AUTO_ADDED_FIELD_PREFIX)
+        for marker in explicit_section.schema.schema
+    )
+
+
+def test_sync_preserves_explicit_and_removes_only_auto_added() -> None:
+    """Changing discovery removes auto-added entities but keeps explicit ones."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+        CONF_POWER_SENSORS: ["sensor.powercalc_auto", "sensor.explicit_power"],
+        CONF_AUTO_ADDED_SENSORS: {CONF_POWER_SENSORS: ["sensor.powercalc_auto"]},
+        CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"],
+    }
+    draft[CONF_AUTO_ADDED_SENSORS][CONF_MOTION_SENSORS] = ["binary_sensor.motion_auto"]
+    submitted = {CONF_POWER_SENSORS: ["sensor.explicit_power"]}
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.discover_area_sensors",
+        return_value={CONF_POWER_SENSORS: []},
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            submitted,
+            (CONF_POWER_SENSORS,),
+        )
+
+    assert synced[CONF_POWER_SENSORS] == ["sensor.explicit_power"]
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"]
+    }
+
+
+def test_sync_drops_explicit_device_matches_when_excluded() -> None:
+    """Configured device text matches also block explicit sensor selections."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_EXCLUDED_MANUFACTURERS: ["ratgdo"],
+    }
+
+    with (
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value={},
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.excluded_device_entity_ids",
+            return_value={"binary_sensor.garage_motion"},
+        ),
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            {
+                CONF_MOTION_SENSORS: [
+                    "binary_sensor.garage_motion",
+                    "binary_sensor.room_motion",
+                ]
+            },
+            (CONF_MOTION_SENSORS,),
+        )
+
+    assert synced[CONF_MOTION_SENSORS] == ["binary_sensor.room_motion"]
+
+
+async def test_sensors_step_separates_readonly_discovery_from_explicit_selection(
+    config_flow_flow: AreaOccupancyConfigFlow,
+) -> None:
+    flow = config_flow_flow
+    flow._area_config_draft = {
+        CONF_AREA_ID: "room",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_MOTION_SENSORS: ["binary_sensor.motion1"],
+    }
+    discovered = {CONF_TEMPERATURE_SENSORS: ["sensor.temp_auto", "sensor.temp_ignore"]}
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.discover_area_sensors",
+            return_value=discovered,
+        ),
+        patch(
+            "custom_components.area_occupancy.config_flow.discover_area_sensors",
+            return_value=discovered,
+        ),
+    ):
+        form = await flow.async_step_area_sensors()
+        assert [marker.schema for marker in form["data_schema"].schema] == [
+            EXPLICIT_SECTION,
+        ]
+
+        explicit_section = next(
+            value
+            for marker, value in form["data_schema"].schema.items()
+            if marker.schema == EXPLICIT_SECTION
+        )
+        field_markers = list(explicit_section.schema.schema)
+        auto_marker = next(
+            marker
+            for marker in field_markers
+            if marker.schema == f"{AUTO_ADDED_FIELD_PREFIX}environmental"
+        )
+        temp_marker = next(
+            marker
+            for marker in field_markers
+            if marker.schema == CONF_TEMPERATURE_SENSORS
+        )
+        assert explicit_section.schema.schema[auto_marker].config["read_only"]
+        assert auto_marker.default() == [
+            "sensor.temp_auto",
+            "sensor.temp_ignore",
+        ]
+        assert field_markers.index(auto_marker) < field_markers.index(temp_marker)
+        assert temp_marker.description is None
+
+        with patch.object(
+            flow, "async_step_area_behavior", new_callable=AsyncMock
+        ) as next_step:
+            await flow.async_step_area_sensors(
+                {
+                    EXPLICIT_SECTION: {
+                        f"{AUTO_ADDED_FIELD_PREFIX}environmental": "tampered value",
+                        CONF_TEMPERATURE_SENSORS: [],
+                    },
+                }
+            )
+
+    next_step.assert_awaited_once()
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
+    assert flow._area_config_draft[CONF_TEMPERATURE_SENSORS] == [
+        "sensor.temp_auto",
+        "sensor.temp_ignore",
+    ]
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS][
+        CONF_TEMPERATURE_SENSORS
+    ] == ["sensor.temp_auto", "sensor.temp_ignore"]
+
+
+def test_sensor_sections_format_automatic_and_explicit_entities() -> None:
+    """Automatic entities are listed read-only and excluded from explicit selectors."""
+    resolved = {
+        CONF_MOTION_SENSORS: [
+            "binary_sensor.motion_auto",
+            "binary_sensor.motion_explicit",
+        ],
+        CONF_AUTO_ADDED_SENSORS: {CONF_MOTION_SENSORS: ["binary_sensor.motion_auto"]},
+    }
+
+    explicit = _explicit_sensor_config(resolved, (CONF_MOTION_SENSORS,))
+    assert explicit[CONF_MOTION_SENSORS] == ["binary_sensor.motion_explicit"]
+    auto_ids = _auto_added_sensor_ids(resolved, (CONF_MOTION_SENSORS,))
+    assert auto_ids == ["binary_sensor.motion_auto"]
+
+
+def _register_area_with_motion(
+    hass: HomeAssistant, name: str, motion_entity_id: str | None = None
+) -> str:
+    """Create an area in the HA registry and optionally assign a motion sensor."""
+    area_reg = ar.async_get(hass)
+    area = area_reg.async_create(name)
+    if motion_entity_id is not None:
+        ent_reg = er.async_get(hass)
+        object_id = motion_entity_id.split(".", 1)[1]
+        entry = ent_reg.async_get_or_create(
+            "binary_sensor",
+            "test",
+            object_id,
+            suggested_object_id=object_id,
+            original_device_class="motion",
+        )
+        ent_reg.async_update_entity(entry.entity_id, area_id=area.id)
+    return area.id
+
+
+async def test_user_step_does_not_auto_add_areas_and_triggers_discovery(
+    hass: HomeAssistant,
+) -> None:
+    """Initial user setup opens the first-area wizard without auto-adding all areas."""
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    _register_area_with_motion(hass, "Master Bedroom", "binary_sensor.bedroom_motion")
+    _register_area_with_motion(hass, "Hall Closet", None)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    result = await flow.async_step_user()
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "area_basics"
+    assert flow._areas == []
+    assert flow._area_config_draft[CONF_AREA_ID] == kitchen_id
+    assert flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name("Kitchen")
+
+    flow._areas = [create_area_config(area_id=kitchen_id)]
+    with patch(
+        "custom_components.area_occupancy.config_flow.async_trigger_area_discoveries",
+    ) as mock_trigger:
+        finish = await flow.async_step_finish_setup()
+
+    assert finish["type"] == FlowResultType.CREATE_ENTRY
+    subentries = finish["subentries"]
+    assert len(subentries) == 1
+    assert subentries[0]["data"][CONF_AREA_ID] == kitchen_id
+    assert subentries[0]["subentry_type"] == SUBENTRY_TYPE_AREA
+    mock_trigger.assert_called_once_with(hass)
+
+
+async def test_init_area_wizard_suggests_next_eligible_area(
+    hass: HomeAssistant,
+) -> None:
+    """Adding an area pre-populates the next unconfigured eligible area."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    bedroom_id = _register_area_with_motion(
+        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
+    )
+
+    config_flow = AreaOccupancyConfigFlow()
+    config_flow.hass = hass
+    config_flow.context = {"source": "user"}
+    config_flow._areas = [{CONF_AREA_ID: kitchen_id}]
+    config_flow._init_area_wizard()
+    assert config_flow._area_config_draft[CONF_AREA_ID] == bedroom_id
+    assert config_flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name(
+        "Master Bedroom"
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=kitchen_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Kitchen",
+                "unique_id": kitchen_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    options_flow = AreaOccupancyOptionsFlow()
+    options_flow.hass = hass
+    options_flow.handler = entry.entry_id
+    options_flow._init_area_wizard()
+    assert options_flow._area_config_draft[CONF_AREA_ID] == bedroom_id
+    assert options_flow._area_config_draft[CONF_PURPOSE] == infer_purpose_from_name(
+        "Master Bedroom"
+    )
+
+
+async def test_integration_discovery_creates_entry_when_none_exists(
+    hass: HomeAssistant,
+) -> None:
+    """Confirming area discovery creates the config entry with one subentry."""
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+
+    step = await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+    assert step["type"] == FlowResultType.FORM
+    assert step["step_id"] == "discovery_confirm"
+
+    result = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert len(result["subentries"]) == 1
+    assert result["subentries"][0]["data"][CONF_AREA_ID] == kitchen_id
+    assert result["subentries"][0]["subentry_type"] == SUBENTRY_TYPE_AREA
+
+
+async def test_integration_discovery_adds_subentry_to_active_entry(
+    hass: HomeAssistant,
+) -> None:
+    """Confirming area discovery adds a subentry to the active entry and aborts."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    living_id = _register_area_with_motion(
+        hass, "Living Room", "binary_sensor.living_motion"
+    )
+    bedroom_id = _register_area_with_motion(
+        hass, "Master Bedroom", "binary_sensor.bedroom_motion"
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=living_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Living Room",
+                "unique_id": living_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+
+    step = await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: bedroom_id, "area_name": "Master Bedroom"}
+    )
+    assert step["type"] == FlowResultType.FORM
+    assert step["step_id"] == "discovery_confirm"
+    assert CONF_ADJACENT_AREAS in step["data_schema"].schema
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_add_subentry",
+            wraps=hass.config_entries.async_add_subentry,
+        ) as mock_add_subentry,
+        patch(
+            "custom_components.area_occupancy.config_flow.async_trigger_area_discoveries",
+        ) as mock_trigger,
+    ):
+        result = await flow.async_step_discovery_confirm(
+            {
+                CONF_PURPOSE: infer_purpose_from_name("Master Bedroom"),
+                CONF_AUTO_DISCOVER_SENSORS: True,
+                CONF_EXCLUDED_SENSORS: [],
+                CONF_ADJACENT_AREAS: [living_id],
+            }
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "area_added"
+    mock_add_subentry.assert_called_once()
+    added_entry, added_subentry = mock_add_subentry.call_args.args
+    assert added_entry is entry
+    assert isinstance(added_subentry, ConfigSubentry)
+    assert added_subentry.subentry_type == SUBENTRY_TYPE_AREA
+    assert added_subentry.data[CONF_AREA_ID] == bedroom_id
+    assert added_subentry.data[CONF_ADJACENT_AREAS] == [living_id]
+    assert added_subentry.subentry_id in entry.subentries
+    living_sub = next(
+        sub
+        for sub in entry.subentries.values()
+        if sub.data.get(CONF_AREA_ID) == living_id
+    )
+    assert living_sub.data[CONF_ADJACENT_AREAS] == [bedroom_id]
+    mock_trigger.assert_called_once_with(hass)
+
+
+async def test_discovery_confirm_validates_motion_required(
+    hass: HomeAssistant,
+) -> None:
+    """Excluding all motion sensors or disabling auto-discovery shows error."""
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+    await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+
+    disabled_res = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: False,
+            CONF_EXCLUDED_SENSORS: [],
+        }
+    )
+    assert disabled_res["type"] == FlowResultType.FORM
+    assert disabled_res["step_id"] == "discovery_confirm"
+    assert disabled_res["errors"] == {"base": "motion_required"}
+
+    excluded_res = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: DEFAULT_PURPOSE,
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_EXCLUDED_SENSORS: ["binary_sensor.kitchen_motion"],
+        }
+    )
+    assert excluded_res["type"] == FlowResultType.FORM
+    assert excluded_res["step_id"] == "discovery_confirm"
+    assert excluded_res["errors"] == {"base": "motion_required"}
+
+
+async def test_integration_discovery_abort_reasons(hass: HomeAssistant) -> None:
+    """Discovery entry step aborts when area info is missing, invalid, or configured."""
+    from custom_components.area_occupancy.const import CONF_VERSION
+
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+    empty_area_id = _register_area_with_motion(hass, "Closet", None)
+
+    def _new_flow() -> AreaOccupancyConfigFlow:
+        flow = AreaOccupancyConfigFlow()
+        flow.hass = hass
+        flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+        return flow
+
+    missing_res = await _new_flow().async_step_integration_discovery({})
+    assert missing_res["type"] == FlowResultType.ABORT
+    assert missing_res["reason"] == "area_required"
+
+    not_found_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: "nonexistent_area"}
+    )
+    assert not_found_res["type"] == FlowResultType.ABORT
+    assert not_found_res["reason"] == "area_not_found"
+
+    no_motion_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: empty_area_id}
+    )
+    assert no_motion_res["type"] == FlowResultType.ABORT
+    assert no_motion_res["reason"] == "motion_required"
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        version=CONF_VERSION,
+        data={},
+        options={},
+        subentries_data=[
+            {
+                "data": create_area_config(area_id=kitchen_id),
+                "subentry_type": SUBENTRY_TYPE_AREA,
+                "title": "Kitchen",
+                "unique_id": kitchen_id,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    configured_res = await _new_flow().async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id}
+    )
+    assert configured_res["type"] == FlowResultType.ABORT
+    assert configured_res["reason"] == "area_already_configured"
+
+
+async def test_basics_step_unchecking_domain_and_excluding_integration(
+    hass: HomeAssistant,
+) -> None:
+    """Unchecking a discovery domain and excluding an integration skips them cleanly."""
+    from custom_components.area_occupancy.discovery import DISCOVERABLE_SENSOR_KEYS
+
+    area_reg = ar.async_get(hass)
+    ent_reg = er.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    pir = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "office_pir",
+        suggested_object_id="office_motion",
+        original_device_class="motion",
+    )
+    ent_reg.async_update_entity(pir.entity_id, area_id=office.id)
+
+    magic = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "magic_areas",
+        "office_magic",
+        suggested_object_id="magic_office_motion",
+        original_device_class="occupancy",
+    )
+    ent_reg.async_update_entity(magic.entity_id, area_id=office.id)
+
+    power = ent_reg.async_get_or_create(
+        "sensor",
+        "powercalc",
+        "office_power",
+        suggested_object_id="office_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(power.entity_id, area_id=office.id)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    basics_form = await flow.async_step_area_basics()
+    assert basics_form["type"] == FlowResultType.FORM
+    schema = basics_form["data_schema"].schema
+    assert SECTION_AUTO_DISCOVERY_TYPES in schema
+    assert SECTION_AREA_EXCLUSIONS in schema
+    exclusions_section_marker = next(
+        key for key in schema if str(key) == SECTION_AREA_EXCLUSIONS
+    )
+    exclusions_section_schema = schema[exclusions_section_marker].schema.schema
+    for excluded_key in (
+        CONF_EXCLUDED_MANUFACTURERS,
+        CONF_EXCLUDED_MODELS,
+        CONF_EXCLUDED_INTEGRATIONS,
+        CONF_EXCLUDED_SENSORS,
+    ):
+        marker = next(
+            key for key in exclusions_section_schema if str(key) == excluded_key
+        )
+        assert marker.default() == []
+
+    excluded_int_marker = next(
+        key
+        for key in exclusions_section_schema
+        if str(key) == CONF_EXCLUDED_INTEGRATIONS
+    )
+    excluded_int_options = {
+        opt["value"]
+        for opt in exclusions_section_schema[excluded_int_marker].config["options"]
+    }
+    assert {"esphome", "magic_areas", "powercalc"}.issubset(excluded_int_options)
+
+    section_marker = next(
+        key for key in schema if str(key) == SECTION_AUTO_DISCOVERY_TYPES
+    )
+    section_schema = schema[section_marker].schema.schema
+    domains_marker = next(
+        key for key in section_schema if str(key) == CONF_AUTO_DISCOVER_DOMAINS
+    )
+    assert set(domains_marker.default()) == {
+        SENSOR_KEY_TO_TYPE_SLUG[key] for key in DISCOVERABLE_SENSOR_KEYS
+    }
+
+    without_power = [k for k in DISCOVERABLE_SENSOR_KEYS if k != CONF_POWER_SENSORS]
+    without_power_slugs = [SENSOR_KEY_TO_TYPE_SLUG[k] for k in without_power]
+    next_res = await flow.async_step_area_basics(
+        {
+            CONF_AREA_ID: office.id,
+            CONF_PURPOSE: "work",
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            SECTION_AUTO_DISCOVERY_TYPES: {
+                CONF_AUTO_DISCOVER_DOMAINS: without_power_slugs,
+            },
+            SECTION_AREA_EXCLUSIONS: {
+                CONF_EXCLUDED_MANUFACTURERS: ["ratgdo"],
+                CONF_EXCLUDED_INTEGRATIONS: ["magic_areas"],
+                CONF_EXCLUDED_SENSORS: [],
+            },
+        }
+    )
+    assert next_res["type"] == FlowResultType.FORM
+    assert next_res["step_id"] == "area_motion"
+    assert flow._area_config_draft[CONF_AUTO_DISCOVER_DOMAINS] == without_power
+    assert flow._area_config_draft[CONF_EXCLUDED_INTEGRATIONS] == ["magic_areas"]
+    assert flow._area_config_draft[CONF_EXCLUDED_MANUFACTURERS] == ["ratgdo"]
+
+    motion_auto_section = next(
+        value
+        for key, value in next_res["data_schema"].schema.items()
+        if str(key) == AUTO_ADDED_SECTION
+    )
+    motion_auto_marker = next(
+        key
+        for key in motion_auto_section.schema.schema
+        if str(key) == AUTO_ADDED_ENTITIES_FIELD
+    )
+    assert pir.entity_id in motion_auto_marker.default()
+
+    sensors_res = await flow.async_step_area_motion(
+        {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
+    )
+    assert sensors_res["type"] == FlowResultType.FORM
+    assert sensors_res["step_id"] == "area_sensors"
+
+    explicit_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == EXPLICIT_SECTION
+    )
+    power_marker = next(
+        key for key in explicit_section.schema.schema if str(key) == CONF_POWER_SENSORS
+    )
+    assert (
+        power_marker.description is None
+        or "suggested_value" not in power_marker.description
+    )
+
+    with patch.object(
+        flow, "async_step_area_behavior", new_callable=AsyncMock
+    ) as behavior_step:
+        await flow.async_step_area_sensors({EXPLICIT_SECTION: {CONF_POWER_SENSORS: []}})
+
+    behavior_step.assert_awaited_once()
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
+
+
+async def test_discovery_confirm_persists_domain_filter_and_excluded_integrations(
+    hass: HomeAssistant,
+) -> None:
+    """Sectioned discovery options and excluded integrations persist on discovery_confirm."""
+    kitchen_id = _register_area_with_motion(
+        hass, "Kitchen", "binary_sensor.kitchen_motion"
+    )
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": SOURCE_INTEGRATION_DISCOVERY}
+    await flow.async_step_integration_discovery(
+        {CONF_AREA_ID: kitchen_id, "area_name": "Kitchen"}
+    )
+
+    result = await flow.async_step_discovery_confirm(
+        {
+            CONF_PURPOSE: infer_purpose_from_name("Kitchen"),
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            SECTION_AUTO_DISCOVERY_TYPES: {
+                CONF_AUTO_DISCOVER_DOMAINS: [
+                    SENSOR_KEY_TO_TYPE_SLUG[CONF_MOTION_SENSORS]
+                ],
+            },
+            SECTION_AREA_EXCLUSIONS: {
+                CONF_EXCLUDED_MANUFACTURERS: ["ratgdo"],
+                CONF_EXCLUDED_INTEGRATIONS: ["powercalc"],
+                CONF_EXCLUDED_SENSORS: [],
+            },
+        }
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    saved = result["subentries"][0]["data"]
+    assert saved[CONF_AUTO_DISCOVER_DOMAINS] == [CONF_MOTION_SENSORS]
+    assert saved[CONF_EXCLUDED_INTEGRATIONS] == ["powercalc"]
+    assert saved[CONF_EXCLUDED_MANUFACTURERS] == ["ratgdo"]
+
+
+def test_excluded_integration_options_have_readable_labels() -> None:
+    """Keep internal integration IDs out of the visible selector labels."""
+    options = _get_excluded_integration_options(
+        None,
+        {CONF_EXCLUDED_INTEGRATIONS: ["magic_areas:light", "powercalc"]},
+    )
+
+    assert {option["value"]: option["label"] for option in options} == {
+        "magic_areas:light": "Magic Areas — Light",
+        "powercalc": "Powercalc",
+    }
+
+
+async def test_basics_step_exclude_light_power_and_source_domain_options(
+    hass: HomeAssistant,
+) -> None:
+    """Light power sensors are excluded by default and platform:source_domain is offered."""
+    area_reg = ar.async_get(hass)
+    ent_reg = er.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    pir = ent_reg.async_get_or_create(
+        "binary_sensor",
+        "esphome",
+        "office_pir",
+        suggested_object_id="office_motion",
+        original_device_class="motion",
+    )
+    ent_reg.async_update_entity(pir.entity_id, area_id=office.id)
+
+    lamp_power = ent_reg.async_get_or_create(
+        "sensor",
+        "powercalc",
+        "lamp_power",
+        suggested_object_id="desk_lamp_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(lamp_power.entity_id, area_id=office.id)
+    hass.states.async_set(
+        lamp_power.entity_id,
+        "12.3",
+        {"device_class": "power", "source_domain": "light"},
+    )
+
+    desk_power = ent_reg.async_get_or_create(
+        "sensor",
+        "zha",
+        "desk_power",
+        suggested_object_id="desk_plug_power",
+        original_device_class="power",
+    )
+    ent_reg.async_update_entity(desk_power.entity_id, area_id=office.id)
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+
+    basics_form = await flow.async_step_area_basics()
+    schema = basics_form["data_schema"].schema
+    expand_groups_marker = next(key for key in schema if str(key) == CONF_EXPAND_GROUPS)
+    assert expand_groups_marker.default() == GroupExpansionMode.FOLLOW_GLOBAL
+    assert set(expand_groups_marker.config["options"]) == {
+        GroupExpansionMode.FOLLOW_GLOBAL,
+        GroupExpansionMode.EXPAND,
+        GroupExpansionMode.KEEP,
+    }
+    exclude_light_marker = next(
+        key for key in schema if str(key) == CONF_EXCLUDE_LIGHT_POWER
+    )
+    assert exclude_light_marker.default() == DEFAULT_AREA_EXCLUSION_SETTING
+    assert set(exclude_light_marker.config["options"]) == {
+        ExclusionMode.FOLLOW_GLOBAL,
+        ExclusionMode.EXCLUDE,
+        ExclusionMode.INCLUDE,
+    }
+
+    exclusions_section_marker = next(
+        key for key in schema if str(key) == SECTION_AREA_EXCLUSIONS
+    )
+    exclusions_section_schema = schema[exclusions_section_marker].schema.schema
+    excluded_int_marker = next(
+        key
+        for key in exclusions_section_schema
+        if str(key) == CONF_EXCLUDED_INTEGRATIONS
+    )
+    options = {
+        opt["value"]
+        for opt in exclusions_section_schema[excluded_int_marker].config["options"]
+    }
+    assert {"powercalc", "powercalc:light", "esphome", "zha"}.issubset(options)
+
+    await flow.async_step_area_basics(
+        {
+            CONF_AREA_ID: office.id,
+            CONF_PURPOSE: "work",
+            CONF_EXCLUDE_LIGHT_POWER: ExclusionMode.EXCLUDE,
+        }
+    )
+    sensors_res = await flow.async_step_area_motion(
+        {EXPLICIT_SECTION: {CONF_MOTION_SENSORS: [pir.entity_id]}}
+    )
+    auto_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == AUTO_ADDED_SECTION
+    )
+    auto_marker = next(
+        key
+        for key in auto_section.schema.schema
+        if str(key) == AUTO_ADDED_ENTITIES_FIELD
+    )
+    assert desk_power.entity_id in auto_marker.default()
+    explicit_section = next(
+        value
+        for key, value in sensors_res["data_schema"].schema.items()
+        if str(key) == EXPLICIT_SECTION
+    )
+    power_marker = next(
+        key for key in explicit_section.schema.schema if str(key) == CONF_POWER_SENSORS
+    )
+    assert power_marker.description is None
+
+    with patch.object(
+        flow, "async_step_area_behavior", new_callable=AsyncMock
+    ) as behavior_step:
+        await flow.async_step_area_sensors(
+            {EXPLICIT_SECTION: {CONF_POWER_SENSORS: [desk_power.entity_id]}}
+        )
+
+    behavior_step.assert_awaited_once()
+    assert flow._area_config_draft.get(CONF_EXCLUDED_SENSORS, []) == []
+
+
+def test_subentry_flow_get_global_options_reads_parent_entry() -> None:
+    """AreaSubentryFlowHandler._get_global_options reads options from its parent entry."""
+    handler = AreaSubentryFlowHandler()
+    with patch.object(
+        handler,
+        "_get_entry",
+        return_value=Mock(options={CONF_EXCLUDED_MANUFACTURERS: ["Acme"]}),
+    ):
+        assert handler._get_global_options() == {CONF_EXCLUDED_MANUFACTURERS: ["Acme"]}
+
+
+def test_normalize_basics_submission_converts_sensor_type_slugs() -> None:
+    """_normalize_basics_submission flattens sections and converts discovery slugs."""
+    normalized = _normalize_basics_submission(
+        {
+            CONF_PURPOSE: "work",
+            SECTION_AUTO_DISCOVERY_TYPES: {
+                CONF_AUTO_DISCOVER_DOMAINS: [
+                    SENSOR_KEY_TO_TYPE_SLUG[CONF_MOTION_SENSORS]
+                ]
+            },
+            SECTION_AREA_EXCLUSIONS: {
+                CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
+                CONF_EXCLUDED_MODELS: ["X1"],
+            },
+        }
+    )
+    assert normalized == {
+        CONF_PURPOSE: "work",
+        CONF_AUTO_DISCOVER_DOMAINS: [CONF_MOTION_SENSORS],
+        CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
+        CONF_EXCLUDED_MODELS: ["X1"],
+    }
+
+
+async def test_area_basics_nests_area_exclusions_in_suggested_values(
+    hass: HomeAssistant,
+) -> None:
+    """Existing area exclusions populate SECTION_AREA_EXCLUSIONS in suggested values."""
+    area_reg = ar.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+    flow._area_being_edited = office.id
+    flow._area_config_draft = {
+        CONF_AREA_ID: office.id,
+        CONF_PURPOSE: "work",
+        CONF_EXPAND_GROUPS: False,
+        CONF_EXCLUDE_LIGHT_POWER: False,
+        CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
+        CONF_EXCLUDED_MODELS: ["Model1"],
+        CONF_EXCLUDED_INTEGRATIONS: ["esphome"],
+        CONF_EXCLUDED_SENSORS: ["sensor.skip"],
+    }
+
+    with patch.object(
+        flow,
+        "add_suggested_values_to_schema",
+        wraps=flow.add_suggested_values_to_schema,
+    ) as add_suggested:
+        result = await flow.async_step_area_basics()
+
+    assert result["type"] == FlowResultType.FORM
+    suggested = add_suggested.call_args.args[1]
+    assert suggested[SECTION_AREA_EXCLUSIONS] == {
+        CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
+        CONF_EXCLUDED_MODELS: ["Model1"],
+        CONF_EXCLUDED_SENSORS: ["sensor.skip"],
+        CONF_EXCLUDED_INTEGRATIONS: ["esphome"],
+    }
+    assert CONF_EXCLUDED_MANUFACTURERS not in suggested
+    assert CONF_EXCLUDED_MODELS not in suggested
+    assert CONF_EXCLUDED_INTEGRATIONS not in suggested
+    assert CONF_EXCLUDED_SENSORS not in suggested
+
+
+async def test_options_flow_global_settings_placeholders_are_localized(
+    hass: HomeAssistant,
+    config_flow_options_flow,
+    config_flow_mock_config_entry_with_areas,
+) -> None:
+    """Global settings menu placeholders resolve via common translations."""
+    flow = config_flow_options_flow
+    flow.config_entry = config_flow_mock_config_entry_with_areas
+    hass.config.language = "de"
+    hass.config_entries.async_update_entry(
+        flow.config_entry,
+        options={
+            "health_enabled": False,
+            "expand_groups": False,
+            "purpose_decay_half_lives": {"social": 600},
+        },
+    )
+    de_common = {
+        f"component.{DOMAIN}.common.global_settings_purpose_overrides_count": (
+            "{count} angepasst"
+        ),
+        f"component.{DOMAIN}.common.state_off": "aus",
+        f"component.{DOMAIN}.common.group_expansion_keep": "behalten",
+        f"component.{DOMAIN}.common.away_mode_person_tracking": "Personenverfolgung",
+    }
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.async_get_translations",
+        AsyncMock(return_value=de_common),
+    ):
+        result = await flow.async_step_global_settings()
+
+    placeholders = result["description_placeholders"]
+    assert placeholders["purpose_overrides"] == "1 angepasst"
+    assert placeholders["health"] == "aus"
+    assert placeholders["groups"] == "behalten"
+    assert placeholders["away"] == "Personenverfolgung"

@@ -7,23 +7,38 @@ that are new or were previously only reachable through the flow.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import voluptuous as vol
 
 from custom_components.area_occupancy.config_helpers import (
     DECAY_HALF_LIFE_MAX,
     DECAY_HALF_LIFE_MIN,
+    SLEEP_DECAY_HALF_LIFE_MAX,
+    SLEEP_DECAY_HALF_LIFE_MIN,
     THRESHOLD_MAX,
     THRESHOLD_MIN,
     WEIGHT_KEYS,
     WEIGHT_MAX,
     apply_purpose_based_decay_default,
     duration_to_seconds,
+    is_active_config_entry,
+    normalize_exclusion_mode,
+    normalize_group_expansion_mode,
+    parse_global_purpose_decay_half_lives,
+    parse_global_sleep_decay_half_life,
+    parse_positive_int,
+    resolve_decay_half_life,
+    resolve_exclusion_enabled,
+    resolve_group_expansion_enabled,
+    resolve_sleep_decay_half_life,
     seconds_to_duration,
     validate_area_config,
     validate_button_pulse_duration,
     validate_decay_half_life,
     validate_person_input,
+    validate_sleep_decay_half_life,
     validate_threshold,
 )
 from custom_components.area_occupancy.const import (
@@ -54,15 +69,25 @@ from custom_components.area_occupancy.const import (
     CONF_PERSON_SLEEP_AREA,
     CONF_PERSON_SLEEP_SENSORS,
     CONF_PURPOSE,
+    CONF_PURPOSE_DECAY_HALF_LIVES,
+    CONF_SLEEP_DECAY_HALF_LIFE,
     CONF_THRESHOLD,
     CONF_WEIGHT_MOTION,
     CONF_WINDOW_ACTIVE_STATE,
     CONF_WINDOW_SENSORS,
     DEFAULT_WEIGHT_MOTION,
+    SLEEP_PRESENCE_HALF_LIFE,
+    ExclusionMode,
+    GroupExpansionMode,
 )
 from custom_components.area_occupancy.data.purpose import (
     PURPOSE_DEFINITIONS,
     AreaPurpose,
+)
+from homeassistant.config_entries import (
+    SOURCE_IGNORE,
+    SOURCE_INTEGRATION_DISCOVERY,
+    SOURCE_USER,
 )
 
 
@@ -142,11 +167,75 @@ class TestValidateButtonPulseDuration:
         assert validate_button_pulse_duration(value) == "invalid_button_pulse_duration"
 
 
+class TestValidateSleepDecayHalfLife:
+    """validate_sleep_decay_half_life honours global and area rules."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [0, SLEEP_DECAY_HALF_LIFE_MIN, 7200, SLEEP_DECAY_HALF_LIFE_MAX],
+    )
+    def test_area_accepts_sentinel_and_range(self, value: int) -> None:
+        assert validate_sleep_decay_half_life(value, allow_zero=True) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            SLEEP_DECAY_HALF_LIFE_MIN - 1,
+            SLEEP_DECAY_HALF_LIFE_MAX + 1,
+            -1,
+            "7200",
+            None,
+            False,
+        ],
+    )
+    def test_area_rejects_out_of_range_and_non_numeric(self, value: object) -> None:
+        assert (
+            validate_sleep_decay_half_life(value, allow_zero=True)
+            == "invalid_sleep_decay_half_life"
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [SLEEP_DECAY_HALF_LIFE_MIN, 7200, SLEEP_DECAY_HALF_LIFE_MAX],
+    )
+    def test_global_accepts_range(self, value: int) -> None:
+        assert validate_sleep_decay_half_life(value, allow_zero=False) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            0,
+            SLEEP_DECAY_HALF_LIFE_MIN - 1,
+            SLEEP_DECAY_HALF_LIFE_MAX + 1,
+            -1,
+            "7200",
+            None,
+            False,
+        ],
+    )
+    def test_global_rejects_zero_out_of_range_and_non_numeric(
+        self, value: object
+    ) -> None:
+        assert (
+            validate_sleep_decay_half_life(value, allow_zero=False)
+            == "invalid_global_sleep_decay_half_life"
+        )
+
+
 class TestValidateAreaConfig:
     """validate_area_config covers every hass-free rule."""
 
     def test_minimal_valid_config_has_no_errors(self) -> None:
         assert validate_area_config(_valid_area()) == {}
+
+    def test_invalid_sleep_decay_half_life(self) -> None:
+        config = _valid_area()
+        config[CONF_DECAY_ENABLED] = True
+        config[CONF_SLEEP_DECAY_HALF_LIFE] = SLEEP_DECAY_HALF_LIFE_MIN - 1
+        assert (
+            validate_area_config(config)[CONF_SLEEP_DECAY_HALF_LIFE]
+            == "invalid_sleep_decay_half_life"
+        )
 
     def test_missing_area_id(self) -> None:
         config = _valid_area()
@@ -384,3 +473,127 @@ class TestValidateCustomSensors:
         config[CONF_CUSTOM_BINARY_ACTIVE_STATES] = ["in_use"]
         config[CONF_CUSTOM_NUMERIC_SENSORS] = ["sensor.counter"]
         assert validate_area_config(config) == {}
+
+
+class TestGlobalParsersAndModes:
+    """Global decay parsers and tri-state exclusion/group mode helpers."""
+
+    def test_parse_positive_int(self) -> None:
+        assert parse_positive_int(120) == 120
+        assert parse_positive_int("45") == 45
+        assert parse_positive_int(0) is None
+        assert parse_positive_int(-5) is None
+        assert parse_positive_int(True) is None
+        assert parse_positive_int("bad") is None
+        assert parse_positive_int(None) is None
+
+    def test_parse_global_sleep_decay_half_life(self) -> None:
+        assert parse_global_sleep_decay_half_life({}) == SLEEP_PRESENCE_HALF_LIFE
+        assert (
+            parse_global_sleep_decay_half_life({CONF_SLEEP_DECAY_HALF_LIFE: 900}) == 900
+        )
+        assert (
+            parse_global_sleep_decay_half_life({CONF_SLEEP_DECAY_HALF_LIFE: True})
+            == SLEEP_PRESENCE_HALF_LIFE
+        )
+
+    def test_parse_global_purpose_decay_half_lives(self) -> None:
+        assert parse_global_purpose_decay_half_lives({}) == {}
+        assert parse_global_purpose_decay_half_lives(
+            {
+                CONF_PURPOSE_DECAY_HALF_LIVES: {
+                    "living": "180",
+                    "bathroom": 120,
+                    "invalid_zero": 0,
+                    "invalid_bool": True,
+                    "invalid_str": "abc",
+                }
+            }
+        ) == {"living": 180, "bathroom": 120}
+
+    def test_normalize_and_resolve_exclusion_mode(self) -> None:
+        assert (
+            normalize_exclusion_mode(True, default=ExclusionMode.FOLLOW_GLOBAL)
+            == ExclusionMode.EXCLUDE
+        )
+        assert (
+            normalize_exclusion_mode(
+                False,
+                default=ExclusionMode.FOLLOW_GLOBAL,
+                legacy_false=ExclusionMode.INCLUDE,
+            )
+            == ExclusionMode.INCLUDE
+        )
+        assert (
+            normalize_exclusion_mode("bogus", default=ExclusionMode.FOLLOW_GLOBAL)
+            == ExclusionMode.FOLLOW_GLOBAL
+        )
+        assert resolve_exclusion_enabled(True, False, setting_name="test") is True
+        assert resolve_exclusion_enabled(False, True, setting_name="test") is False
+        assert (
+            resolve_exclusion_enabled(
+                ExclusionMode.FOLLOW_GLOBAL, True, setting_name="test"
+            )
+            is True
+        )
+        assert (
+            resolve_exclusion_enabled(
+                ExclusionMode.FOLLOW_GLOBAL, False, setting_name="test"
+            )
+            is False
+        )
+
+    def test_normalize_and_resolve_group_expansion_mode(self) -> None:
+        assert (
+            normalize_group_expansion_mode(
+                True, default=GroupExpansionMode.FOLLOW_GLOBAL
+            )
+            == GroupExpansionMode.EXPAND
+        )
+        assert (
+            normalize_group_expansion_mode(
+                False, default=GroupExpansionMode.FOLLOW_GLOBAL
+            )
+            == GroupExpansionMode.KEEP
+        )
+        assert (
+            normalize_group_expansion_mode(
+                "invalid", default=GroupExpansionMode.FOLLOW_GLOBAL
+            )
+            == GroupExpansionMode.FOLLOW_GLOBAL
+        )
+        assert resolve_group_expansion_enabled(True, False) is True
+        assert resolve_group_expansion_enabled(False, True) is False
+        assert (
+            resolve_group_expansion_enabled(GroupExpansionMode.FOLLOW_GLOBAL, True)
+            is True
+        )
+        assert (
+            resolve_group_expansion_enabled(GroupExpansionMode.FOLLOW_GLOBAL, False)
+            is False
+        )
+        with pytest.raises(ValueError, match="Invalid global group-expansion setting"):
+            resolve_group_expansion_enabled(GroupExpansionMode.FOLLOW_GLOBAL, "bad")
+
+    def test_resolve_decay_and_sleep_half_lives(self) -> None:
+        coordinator = SimpleNamespace(
+            integration_config=SimpleNamespace(
+                purpose_decay_half_lives={"bathroom": 120},
+                sleep_decay_half_life=7200,
+            )
+        )
+        assert resolve_decay_half_life(0, "bathroom", coordinator) == 120.0
+        assert resolve_decay_half_life(300, "bathroom", coordinator) == 300.0
+        assert resolve_sleep_decay_half_life(0, coordinator) == 7200
+        assert resolve_sleep_decay_half_life(900, coordinator) == 900
+        assert resolve_sleep_decay_half_life(None, None) == SLEEP_PRESENCE_HALF_LIFE
+
+    def test_is_active_config_entry(self) -> None:
+        assert is_active_config_entry(SimpleNamespace(source=SOURCE_IGNORE)) is False
+        assert is_active_config_entry(SimpleNamespace(source=SOURCE_USER)) is True
+        assert (
+            is_active_config_entry(SimpleNamespace(source=SOURCE_INTEGRATION_DISCOVERY))
+            is True
+        )
+        assert is_active_config_entry(SimpleNamespace(source=None)) is True
+        assert is_active_config_entry(SimpleNamespace()) is True

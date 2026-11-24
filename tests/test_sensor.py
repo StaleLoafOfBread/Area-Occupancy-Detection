@@ -1754,3 +1754,107 @@ class TestAccuracySensor:
         sensor = AccuracySensor(area_handle=coordinator.get_area_handle(area_name))
         assert sensor.entity_category == EntityCategory.DIAGNOSTIC
         assert sensor.entity_registry_enabled_default is False
+
+
+class TestProbabilitySensorDecayClearAt:
+    """Tests for ProbabilitySensor.extra_state_attributes decay_clear_at."""
+
+    def test_decay_clear_at_is_unrecorded(self) -> None:
+        """decay_clear_at stays out of the recorder to avoid attribute bloat."""
+        assert "decay_clear_at" in ProbabilitySensor._unrecorded_attributes
+
+    def test_exposes_iso_timestamp_and_none(
+        self, coordinator: AreaOccupancyCoordinator
+    ) -> None:
+        """ProbabilitySensor surfaces decay_clear_at as ISO UTC string or None."""
+        from datetime import UTC, datetime
+
+        area_name = coordinator.get_area_names()[0]
+        area = coordinator.get_area(area_name)
+        sensor = ProbabilitySensor(area_handle=coordinator.get_area_handle(area_name))
+        target = datetime(2026, 11, 21, 23, 5, 18, tzinfo=UTC)
+
+        with patch.object(area, "decay_clear_at", return_value=target):
+            attrs = sensor.extra_state_attributes
+            assert attrs["decay_clear_at"] == target.isoformat()
+
+        with patch.object(area, "decay_clear_at", return_value=None):
+            attrs = sensor.extra_state_attributes
+            assert attrs["decay_clear_at"] is None
+
+    def test_decaying_expires_at_is_unrecorded(self) -> None:
+        """decaying_expires_at stays out of the recorder to avoid attribute bloat."""
+        assert "decaying_expires_at" in ProbabilitySensor._unrecorded_attributes
+
+    def test_exposes_per_entity_decaying_expires_at(
+        self, coordinator: AreaOccupancyCoordinator
+    ) -> None:
+        """ProbabilitySensor surfaces per-entity decay expiry ISO timestamps."""
+        from datetime import UTC, datetime
+
+        area_name = coordinator.get_area_names()[0]
+        area = coordinator.get_area(area_name)
+        sensor = ProbabilitySensor(area_handle=coordinator.get_area_handle(area_name))
+        target = datetime(2026, 11, 21, 23, 5, 18, tzinfo=UTC)
+
+        mock_entity1 = Mock()
+        mock_entity1.entity_id = "binary_sensor.motion_1"
+        mock_entity1.decay.decay_factor = 0.6
+        mock_entity1.decay.half_life = 300.0
+        mock_entity1.decay.expires_at.return_value = target
+
+        mock_entity2 = Mock()
+        mock_entity2.entity_id = "binary_sensor.motion_2"
+        mock_entity2.decay.decay_factor = 0.4
+        mock_entity2.decay.half_life = 120.0
+        mock_entity2.decay.expires_at.return_value = None
+
+        with patch.object(
+            type(area.entities),
+            "decaying_entities",
+            new_callable=PropertyMock(return_value=[mock_entity1, mock_entity2]),
+        ):
+            attrs = sensor.extra_state_attributes
+            assert attrs["decaying_expires_at"] == {
+                "binary_sensor.motion_1": target.isoformat()
+            }
+
+    def test_environmental_entities_is_unrecorded(self) -> None:
+        """environmental_entities stays out of the recorder to avoid bloat."""
+        assert "environmental_entities" in ProbabilitySensor._unrecorded_attributes
+
+    def test_exposes_environmental_entities_attribute(
+        self, coordinator: AreaOccupancyCoordinator
+    ) -> None:
+        """ProbabilitySensor exposes environmental entity IDs safely."""
+        from custom_components.area_occupancy.data.entity_type import InputType
+
+        area_name = coordinator.get_area_names()[0]
+        area = coordinator.get_area(area_name)
+        sensor = ProbabilitySensor(area_handle=coordinator.get_area_handle(area_name))
+
+        env_entity = Mock()
+        env_entity.entity_id = "sensor.room_temperature"
+        env_entity.type = Mock(input_type=InputType.TEMPERATURE)
+
+        power_entity = Mock()
+        power_entity.entity_id = "sensor.desk_power"
+        power_entity.type = Mock(input_type=InputType.POWER)
+
+        untyped_entity = Mock()
+        untyped_entity.entity_id = "sensor.unknown"
+        untyped_entity.type = None
+
+        with patch.object(
+            type(area.entities),
+            "entities",
+            new_callable=PropertyMock(
+                return_value={
+                    env_entity.entity_id: env_entity,
+                    power_entity.entity_id: power_entity,
+                    untyped_entity.entity_id: untyped_entity,
+                }
+            ),
+        ):
+            attrs = sensor.extra_state_attributes
+            assert attrs["environmental_entities"] == ["sensor.room_temperature"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -11,14 +12,25 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory
+from homeassistant.const import ATTR_ENTITY_ID, PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .area import AllAreas, AreaDeviceHandle, FloorAreas
-from .const import ALL_AREAS_IDENTIFIER, DEFAULT_SENSOR_PRECISION
+from .const import (
+    ALL_AREAS_IDENTIFIER,
+    ATTR_ACTIVE_ENTITIES,
+    ATTR_ADJACENT_AREAS,
+    ATTR_DECAY_CLEAR_AT,
+    ATTR_DECAY_FACTOR,
+    ATTR_DECAYING_ENTITIES,
+    ATTR_DECAYING_EXPIRES_AT,
+    ATTR_DECAYING_HALF_LIVES,
+    ATTR_ENVIRONMENTAL_ENTITIES,
+    DEFAULT_SENSOR_PRECISION,
+)
 from .data.activity import ActivityId
-from .data.entity_type import InputType
+from .data.entity_type import ENVIRONMENTAL_INPUT_TYPES, InputType
 from .data.metrics import AccuracyMetrics, suggest_threshold
 from .utils import (
     assign_device_to_ha_area,
@@ -176,6 +188,16 @@ class PriorsSensor(AreaOccupancySensorBase):
 class ProbabilitySensor(AreaOccupancySensorBase):
     """Probability sensor for current area occupancy."""
 
+    _unrecorded_attributes: frozenset[str] = frozenset(
+        {
+            ATTR_ADJACENT_AREAS,
+            ATTR_DECAYING_HALF_LIVES,
+            ATTR_DECAYING_EXPIRES_AT,
+            ATTR_DECAY_CLEAR_AT,
+            ATTR_ENVIRONMENTAL_ENTITIES,
+        }
+    )
+
     def __init__(
         self,
         area_handle: AreaDeviceHandle | None = None,
@@ -222,16 +244,41 @@ class ProbabilitySensor(AreaOccupancySensorBase):
         try:
             snapshot = area.prior.diagnostic_snapshot()
             active_entities = [e.entity_id for e in area.entities.active_entities]
-            decaying_entities = [
-                {"entity_id": e.entity_id, "decay_factor": e.decay.decay_factor}
-                for e in area.entities.decaying_entities
+            environmental_entities = [
+                e.entity_id
+                for e in area.entities.entities.values()
+                if getattr(getattr(e, "type", None), "input_type", None)
+                in ENVIRONMENTAL_INPUT_TYPES
             ]
+            decaying = area.entities.decaying_entities
+            decaying_entities = [
+                {
+                    ATTR_ENTITY_ID: e.entity_id,
+                    ATTR_DECAY_FACTOR: e.decay.decay_factor,
+                }
+                for e in decaying
+            ]
+            decaying_half_lives = {e.entity_id: e.decay.half_life for e in decaying}
+            decaying_expires_at = {
+                e.entity_id: expires.isoformat()
+                for e in decaying
+                if isinstance((expires := e.decay.expires_at()), datetime)
+            }
+            clear_at = area.decay_clear_at()
+            decay_clear_at = (
+                clear_at.isoformat() if isinstance(clear_at, datetime) else None
+            )
         except (AttributeError, KeyError, TypeError):
             return {}
         return {
             **snapshot,
-            "active_entities": active_entities,
-            "decaying_entities": decaying_entities,
+            ATTR_ACTIVE_ENTITIES: active_entities,
+            ATTR_ENVIRONMENTAL_ENTITIES: environmental_entities,
+            ATTR_DECAYING_ENTITIES: decaying_entities,
+            ATTR_DECAYING_HALF_LIVES: decaying_half_lives,
+            ATTR_DECAYING_EXPIRES_AT: decaying_expires_at,
+            ATTR_DECAY_CLEAR_AT: decay_clear_at,
+            ATTR_ADJACENT_AREAS: list(area.config.adjacent_areas or []),
         }
 
 

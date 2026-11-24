@@ -1,13 +1,20 @@
 """Test the purpose data module."""
 
+import json
+
 import pytest
 
+from custom_components.area_occupancy.const import DEFAULT_PURPOSE
 from custom_components.area_occupancy.data.purpose import (
+    _PURPOSE_INFERENCE_ORDER,
+    _PURPOSE_KEYWORDS_DIR,
     PURPOSE_DEFINITIONS,
     AreaPurpose,
     Purpose,
     get_default_decay_half_life,
+    get_purpose_keywords,
     get_purpose_options,
+    infer_purpose_from_name,
 )
 
 # Shared constant for all purpose enums
@@ -214,3 +221,57 @@ class TestIsPurposeHalfLife:
     def test_invalid_purpose_returns_false(self):
         """Unknown purpose strings cause False for any non-zero value."""
         assert Purpose.is_purpose_half_life(520, "not_a_real_purpose") is False
+
+
+class TestPurposeKeywordLexiconsAndInference:
+    """Externalized keyword JSON lexicons, locale fallback, aliases, and icon inference."""
+
+    def test_shipped_keyword_files_are_valid(self) -> None:
+        files = list(_PURPOSE_KEYWORDS_DIR.glob("*.json"))
+        assert files
+        valid_purposes = {purpose.value for purpose in AreaPurpose}
+        for path in files:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            assert isinstance(data, dict)
+            assert set(data) <= valid_purposes
+            for keywords in data.values():
+                assert isinstance(keywords, list)
+                assert all(isinstance(k, str) and k.strip() for k in keywords)
+
+        en_purposes = {purpose for purpose, _ in get_purpose_keywords("en")}
+        assert en_purposes == set(_PURPOSE_INFERENCE_ORDER)
+
+    def test_language_independent_icon_inference(self) -> None:
+        assert (
+            infer_purpose_from_name("Schlafzimmer", language="de", icon="mdi:bed")
+            == AreaPurpose.SLEEPING.value
+        )
+        assert (
+            infer_purpose_from_name("Badezimmer", language="de", icon="mdi:shower")
+            == AreaPurpose.BATHROOM.value
+        )
+        assert (
+            infer_purpose_from_name("Soggiorno", language="it", icon="mdi:television")
+            == AreaPurpose.RELAXING.value
+        )
+
+    def test_name_takes_priority_over_conflicting_icon(self) -> None:
+        assert (
+            infer_purpose_from_name("Guest Bedroom", icon="mdi:sofa")
+            == AreaPurpose.SLEEPING.value
+        )
+
+    def test_aliases_match_when_primary_name_is_generic(self) -> None:
+        assert (
+            infer_purpose_from_name("Room 1", aliases={"Kitchen"})
+            == AreaPurpose.FOOD_PREP.value
+        )
+
+    def test_diacritics_and_bcp47_locale_cascade(self) -> None:
+        assert (
+            infer_purpose_from_name("Càfé Study", language="de-AT")
+            == AreaPurpose.WORKING.value
+        )
+        assert infer_purpose_from_name("Unknown Space", language="fr_FR") == (
+            DEFAULT_PURPOSE
+        )

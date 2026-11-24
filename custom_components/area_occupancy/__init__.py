@@ -26,7 +26,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
-from .config_helpers import iter_area_subentries
+from .config_helpers import is_active_config_entry, iter_area_subentries
 from .const import (
     ACCURACY_STORE_KEY_PREFIX,
     ACCURACY_STORE_VERSION,
@@ -36,6 +36,7 @@ from .const import (
     CONF_VERSION,
     CONTINUITY_STORE_KEY_PREFIX,
     CONTINUITY_STORE_VERSION,
+    DASHBOARD_STRATEGY_FILENAME,
     DB_NAME,
     DOMAIN,
     DOOR_HOLD_STORE_KEY_PREFIX,
@@ -76,6 +77,7 @@ from .db.schema import (
     OccupiedIntervalsCache,
     Priors,
 )
+from .discovery import async_track_discovery, async_trigger_area_discoveries
 from .migrations import async_migrate_entry
 from .service import async_setup_services, async_unload_services
 
@@ -218,6 +220,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data["_services_setup"] = {}
         hass.data["_services_setup"][DOMAIN] = True
 
+    async def refresh_discovered_inputs() -> None:
+        await _async_entry_updated(hass, entry, trigger_discoveries=False)
+
+    async_track_discovery(hass, entry, refresh_discovered_inputs)
+    async_trigger_area_discoveries(hass)
+
     # Add update listener
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
@@ -256,7 +264,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Serve the bundled time-priors card and load it on every dashboard.
+    """Serve the bundled frontend tools and load them on every dashboard.
 
     Runs from the component-level ``async_setup`` so it happens once per Home
     Assistant start, not once per config entry. The card is served with long
@@ -268,24 +276,32 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if hass.data.get(FRONTEND_REGISTERED_KEY):
         return
 
-    card_path = Path(__file__).parent / FRONTEND_DIR / TIME_PRIORS_CARD_FILENAME
-    if not await hass.async_add_executor_job(card_path.is_file):
-        _LOGGER.warning(
-            "Time-priors card not found at %s; the dashboard card will not be "
-            "available",
-            card_path,
-        )
-        return
-
-    url_path = f"{FRONTEND_URL_BASE}/{TIME_PRIORS_CARD_FILENAME}"
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(url_path, str(card_path), cache_headers=True)]
+    frontend_dir = Path(__file__).parent / FRONTEND_DIR
+    assets = (
+        (TIME_PRIORS_CARD_FILENAME, "Time-priors card"),
+        (DASHBOARD_STRATEGY_FILENAME, "Area Occupancy dashboard strategy"),
     )
+    paths: list[StaticPathConfig] = []
+    urls: list[str] = []
+    for filename, label in assets:
+        asset_path = frontend_dir / filename
+        if not await hass.async_add_executor_job(asset_path.is_file):
+            _LOGGER.warning("%s not found at %s", label, asset_path)
+            continue
+        url_path = f"{FRONTEND_URL_BASE}/{filename}"
+        paths.append(StaticPathConfig(url_path, str(asset_path), cache_headers=True))
+        urls.append(url_path)
+    if not paths:
+        return
+    await hass.http.async_register_static_paths(paths)
     integration = await async_get_integration(hass, DOMAIN)
-    add_extra_js_url(hass, f"{url_path}?v={integration.version}")
+    for url_path in urls:
+        add_extra_js_url(hass, f"{url_path}?v={integration.version}")
     hass.data[FRONTEND_REGISTERED_KEY] = True
     _LOGGER.debug(
-        "Registered time-priors card at %s (v%s)", url_path, integration.version
+        "Registered Area Occupancy frontend assets at %s (v%s)",
+        ", ".join(urls),
+        integration.version,
     )
 
 
@@ -479,11 +495,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                     seen.add(name)
                     area_names.append(name)
 
-        other_entries = [
-            e
-            for e in hass.config_entries.async_entries(DOMAIN)
-            if e.entry_id != entry.entry_id
-        ]
+        other_entries = _other_active_entries(hass, entry)
 
         if db_path is not None and db_path.exists() and area_names:
             try:
@@ -640,6 +652,15 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         )
 
 
+def _other_active_entries(hass: HomeAssistant, entry: ConfigEntry) -> list[ConfigEntry]:
+    """Return active config entries for this domain other than ``entry``."""
+    return [
+        other
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id and is_active_config_entry(other)
+    ]
+
+
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload entry when configuration is changed."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -655,11 +676,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         # Clean up global coordinator if this is the last/only entry
         # Check if any other entries exist for this domain
-        other_entries = [
-            e
-            for e in hass.config_entries.async_entries(DOMAIN)
-            if e.entry_id != entry.entry_id
-        ]
+        other_entries = _other_active_entries(hass, entry)
 
         if not other_entries:
             # This is the last entry - clean up global coordinator
@@ -744,7 +761,9 @@ def _configured_and_loaded_area_ids(
     return configured, loaded
 
 
-async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_entry_updated(
+    hass: HomeAssistant, entry: ConfigEntry, *, trigger_discoveries: bool = True
+) -> None:
     """Handle config entry update.
 
     Detects whether the area structure changed (add/remove) or just settings
@@ -806,5 +825,12 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 }
             )
         )
+        if coordinator.db is not None:
+            try:
+                await hass.async_add_executor_job(coordinator.db.save_data)
+            except Exception:
+                _LOGGER.exception("Failed to save updated area entities to database")
         await coordinator.async_request_refresh()
         _async_sync_wasp_deprecation_issue(hass, coordinator)
+    if trigger_discoveries:
+        async_trigger_area_discoveries(hass)

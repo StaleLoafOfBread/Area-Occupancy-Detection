@@ -24,6 +24,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from .coordinator import AreaOccupancyCoordinator
     from .data.entity import Entity
 
@@ -168,7 +170,7 @@ def logit(p: float) -> float:
     return math.log(p / (1 - p))
 
 
-def evidence_value(entity: Entity) -> float:
+def evidence_value(entity: Entity, *, at: datetime | None = None) -> float:
     """Return one entity's 0..1 evidence factor (active / decaying / off).
 
     Extracted from ``sigmoid_probability``'s loop so the shadow fusion
@@ -182,6 +184,8 @@ def evidence_value(entity: Entity) -> float:
     if entity.evidence is True:
         return 1.0
     if entity.decay.is_decaying:
+        if at is not None:
+            return entity.decay.decay_factor_at(at)
         return entity.decay_factor  # Gradual fade (0.0 to 1.0)
     return 0.0  # Inactive = no contribution (not negative!)
 
@@ -191,6 +195,8 @@ def sigmoid_probability(
     prior: float = 0.5,
     correlations: dict[str, float] | None = None,
     threshold: float | None = None,
+    *,
+    at: datetime | None = None,
 ) -> float:
     """Calculate occupancy probability using weighted sigmoid model.
 
@@ -219,6 +225,8 @@ def sigmoid_probability(
                      If None or missing entries, defaults to 1.0
         threshold: The area's occupancy threshold, for the hold floor.
                    ``None`` applies only the probability floor.
+        at: Optional UTC timestamp at which to evaluate decaying entities.
+            ``None`` evaluates live ``entity.decay_factor``.
 
     Returns:
         Probability in range MIN_PROBABILITY to MAX_PROBABILITY
@@ -266,7 +274,7 @@ def sigmoid_probability(
 
         # Determine evidence contribution
         # Active = full contribution, Decaying = partial, Inactive = zero
-        evidence = evidence_value(entity)
+        evidence = evidence_value(entity, at=at)
 
         # Scale by sensor type strength (prob_given_true indicates signal strength)
         # Motion (0.95) contributes more than door (0.2)
@@ -318,6 +326,8 @@ def presence_probability(
     prior: float = 0.5,
     correlations: dict[str, float] | None = None,
     threshold: float | None = None,
+    *,
+    at: datetime | None = None,
 ) -> float:
     """Calculate presence probability from strong binary indicators.
 
@@ -331,6 +341,7 @@ def presence_probability(
         correlations: Optional dict of entity_id -> correlation strength
         threshold: The area's occupancy threshold, for the ground-truth hold
             floor (see :func:`sigmoid_probability`)
+        at: Optional UTC timestamp at which to evaluate decaying entities.
 
     Returns:
         Probability in range MIN_PROBABILITY to MAX_PROBABILITY
@@ -347,12 +358,14 @@ def presence_probability(
         # No presence sensors - return reduced prior (uncertain state)
         return clamp_probability(prior * 0.5)
 
-    return sigmoid_probability(presence_entities, prior, correlations, threshold)
+    return sigmoid_probability(presence_entities, prior, correlations, threshold, at=at)
 
 
 def environmental_confidence(
     entities: dict[str, Entity],
     correlations: dict[str, float] | None = None,
+    *,
+    at: datetime | None = None,
 ) -> float:
     """Calculate environmental support as 0-1 confidence.
 
@@ -362,6 +375,7 @@ def environmental_confidence(
     Args:
         entities: Dict of Entity objects
         correlations: Optional dict of entity_id -> correlation strength
+        at: Optional UTC timestamp at which to evaluate decaying entities.
 
     Returns:
         Confidence value 0.0-1.0 (0.5 = neutral, >0.5 = supports, <0.5 = opposes)
@@ -378,7 +392,9 @@ def environmental_confidence(
         return 0.5  # Neutral - no environmental data
 
     # Use 0.5 prior so result is purely from environmental evidence
-    return sigmoid_probability(env_entities, prior=0.5, correlations=correlations)
+    return sigmoid_probability(
+        env_entities, prior=0.5, correlations=correlations, at=at
+    )
 
 
 def combined_probability(

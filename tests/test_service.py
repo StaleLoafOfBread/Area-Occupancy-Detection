@@ -12,6 +12,7 @@ from custom_components.area_occupancy.const import (
     CONF_AREAS,
     CONF_DECAY_HALF_LIFE,
     CONF_MOTION_SENSORS,
+    CONF_PURPOSE_DECAY_HALF_LIVES,
     CONF_THRESHOLD,
     CONF_WASP_ENABLED,
     DEVICE_SW_VERSION,
@@ -907,6 +908,28 @@ class TestSetAreaOption:
             _create_service_call(
                 area_id=area.config.area_id, decay_half_life=purpose_default
             ),
+        )
+
+        assert area.config.update_config.await_args[0][0] == {CONF_DECAY_HALF_LIFE: 0}
+
+    async def test_half_life_matching_global_purpose_override_is_normalised(
+        self,
+        hass: HomeAssistant,
+        mock_config_entry: Mock,
+        coordinator: AreaOccupancyCoordinator,
+    ) -> None:
+        """Global per-purpose decay overrides participate in 0-sentinel normalization."""
+        _setup_coordinator_test(hass, mock_config_entry, coordinator)
+        _, area = self._area(coordinator)
+        area.config.update_config = AsyncMock()
+        hass.config_entries.async_update_entry(
+            mock_config_entry,
+            options={CONF_PURPOSE_DECAY_HALF_LIVES: {area.config.purpose: 777}},
+        )
+
+        await _set_area_option(
+            hass,
+            _create_service_call(area_id=area.config.area_id, decay_half_life=777),
         )
 
         assert area.config.update_config.await_args[0][0] == {CONF_DECAY_HALF_LIFE: 0}

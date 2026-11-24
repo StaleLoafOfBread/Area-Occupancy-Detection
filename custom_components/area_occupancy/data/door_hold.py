@@ -232,6 +232,14 @@ class DoorHold:
         ):
             state.fade_from = None
 
+    def fade_expires_at(self, fade_half_life: float) -> datetime | None:
+        """Return the UTC timestamp when an active fade finishes, or None."""
+        if self.state.fade_from is None:
+            return None
+        return ensure_utc_datetime(self.state.fade_from) + timedelta(
+            seconds=FADE_HALF_LIVES * fade_half_life
+        )
+
     def floor_logit(
         self,
         now: datetime,
@@ -253,6 +261,6 @@ class DoorHold:
         if state.fade_from is None:
             return None
         elapsed = max((ensure_utc_datetime(now) - state.fade_from).total_seconds(), 0)
-        if target <= bias:
+        if elapsed >= FADE_HALF_LIVES * fade_half_life or target <= bias:
             return None
         return bias + (target - bias) * 0.5 ** (elapsed / max(fade_half_life, 1.0))
