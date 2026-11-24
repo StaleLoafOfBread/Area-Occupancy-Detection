@@ -50,7 +50,7 @@ MIN_HA_VERSION: Final = "2026.9.0"
 # into its own config subentry (see migrations.py). Bumping this no longer
 # costs anyone their learned history -- that is what DB_SCHEMA_VERSION below
 # is for.
-CONF_VERSION: Final = 23
+CONF_VERSION: Final = 20
 CONF_VERSION_MINOR: Final = 0
 # Version stamp of the SQLite schema, stored in the ``metadata`` table as
 # ``db_version``. Deliberately independent of ``CONF_VERSION`` (the config

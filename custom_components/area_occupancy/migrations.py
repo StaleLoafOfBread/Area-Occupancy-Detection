@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping
 from difflib import SequenceMatcher
 import logging
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any
 
 from awesomeversion import AwesomeVersion
 
@@ -21,31 +20,19 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
-from .config_helpers import iter_area_subentries
 from .const import (
     CONF_AREA_ID,
     CONF_AREAS,
-    CONF_EXCLUDE_LIGHT_POWER,
-    CONF_EXCLUDED_DEVICE_MATCHES,
-    CONF_EXCLUDED_MANUFACTURERS,
-    CONF_EXCLUDED_MODELS,
-    CONF_EXPAND_GROUPS,
     CONF_MOTION_TIMEOUT,
     CONF_PEOPLE,
     CONF_PERSON_SLEEP_SENSOR,
     CONF_PERSON_SLEEP_SENSORS,
     CONF_VERSION,
     DEFAULT_MOTION_TIMEOUT,
-    DEVICE_ATTR_MANUFACTURER,
-    DEVICE_ATTR_MODEL,
-    DISCOVERY_EXCLUSION_RULES_BY_KEY,
     DOMAIN,
-    GROUP_EXPANSION_SETTING_LABEL,
     LEGACY_DEFAULT_MOTION_TIMEOUT,
     MIN_HA_VERSION,
     SUBENTRY_TYPE_AREA,
-    ExclusionMode,
-    GroupExpansionMode,
 )
 from .db import DB_NAME
 
@@ -663,216 +650,6 @@ def _migrate_motion_timeout_default(
         )
 
 
-def _migrate_area_tri_state_setting(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    *,
-    key: str,
-    default_when_missing: str,
-    true_value: str,
-    false_value: str,
-    valid_values: frozenset[str],
-    setting_label: str,
-) -> None:
-    """Replace a per-area boolean setting with a tri-state enum choice."""
-    for subentry_id, data in iter_area_subentries(config_entry):
-        subentry = config_entry.subentries[subentry_id]
-        if key not in data:
-            setting = default_when_missing
-        else:
-            old_setting = data[key]
-            if old_setting is True:
-                setting = true_value
-            elif old_setting is False:
-                setting = false_value
-            elif isinstance(old_setting, str) and old_setting in valid_values:
-                continue
-            else:
-                _LOGGER.warning(
-                    "Skipping invalid %s setting for area %s: %r",
-                    setting_label,
-                    subentry.title,
-                    old_setting,
-                )
-                continue
-
-        data[key] = setting
-        _ = hass.config_entries.async_update_subentry(
-            config_entry,
-            subentry,
-            data=data,
-        )
-
-
-def _migrate_area_light_power_setting(
-    hass: HomeAssistant, config_entry: ConfigEntry
-) -> None:
-    """Replace the per-area light-power boolean with an explicit choice."""
-    _migrate_area_tri_state_setting(
-        hass,
-        config_entry,
-        key=CONF_EXCLUDE_LIGHT_POWER,
-        default_when_missing=ExclusionMode.FOLLOW_GLOBAL,
-        true_value=ExclusionMode.EXCLUDE,
-        false_value=ExclusionMode.INCLUDE,
-        valid_values=frozenset(ExclusionMode),
-        setting_label=DISCOVERY_EXCLUSION_RULES_BY_KEY[
-            CONF_EXCLUDE_LIGHT_POWER
-        ].setting_label,
-    )
-
-
-def _migrate_area_group_expansion_setting(
-    hass: HomeAssistant, config_entry: ConfigEntry
-) -> None:
-    """Replace the per-area group-expansion boolean with an explicit choice."""
-    _migrate_area_tri_state_setting(
-        hass,
-        config_entry,
-        key=CONF_EXPAND_GROUPS,
-        default_when_missing=GroupExpansionMode.FOLLOW_GLOBAL,
-        true_value=GroupExpansionMode.EXPAND,
-        false_value=GroupExpansionMode.KEEP,
-        valid_values=frozenset(GroupExpansionMode),
-        setting_label=GROUP_EXPANSION_SETTING_LABEL,
-    )
-
-
-def _merge_unique_strings(existing: Any, additions: Iterable[str]) -> list[str]:
-    """Combine existing and new non-empty strings while preserving order."""
-    merged: list[str] = []
-    seen: set[str] = set()
-    sources: tuple[Any, ...] = (
-        *(
-            cast("list[Any] | tuple[Any, ...]", existing)
-            if isinstance(existing, (list, tuple))
-            else ()
-        ),
-        *additions,
-    )
-    for item in sources:
-        if isinstance(item, str) and (cleaned := item.strip()) and cleaned not in seen:
-            seen.add(cleaned)
-            merged.append(cleaned)
-    return merged
-
-
-def _split_legacy_device_matches(
-    legacy_matches: Iterable[Any],
-    existing_manufacturers: Any,
-    existing_models: Any,
-    device_manufacturers_cf: Iterable[str],
-    device_models_cf: Iterable[str],
-) -> tuple[list[str], list[str]]:
-    """Classify legacy combined device fragments into manufacturer and model lists."""
-    mfr_list = list(device_manufacturers_cf)
-    model_list = list(device_models_cf)
-    mfr_additions: list[str] = []
-    model_additions: list[str] = []
-
-    for raw in legacy_matches:
-        if not isinstance(raw, str) or not (fragment := raw.strip()):
-            continue
-        fragment_cf = fragment.casefold()
-        matched_mfr = any(fragment_cf in mfr for mfr in mfr_list)
-        matched_model = any(fragment_cf in model for model in model_list)
-        if matched_mfr:
-            mfr_additions.append(fragment)
-        if matched_model:
-            model_additions.append(fragment)
-        if not matched_mfr and not matched_model:
-            # Preserve unmatched fragments in both lists so offline devices remain blocked
-            # and visible for the user to inspect or remove in the UI.
-            mfr_additions.append(fragment)
-            model_additions.append(fragment)
-
-    return (
-        _merge_unique_strings(existing_manufacturers, mfr_additions),
-        _merge_unique_strings(existing_models, model_additions),
-    )
-
-
-def _migrate_device_match_mapping(
-    data: Mapping[str, Any],
-    device_manufacturers_cf: list[str],
-    device_models_cf: list[str],
-) -> dict[str, Any] | None:
-    """Return updated dict with ``excluded_device_matches`` split, or ``None``."""
-    if CONF_EXCLUDED_DEVICE_MATCHES not in data:
-        return None
-    updated = dict(data)
-    legacy = updated.pop(CONF_EXCLUDED_DEVICE_MATCHES)
-    if isinstance(legacy, (list, tuple)) and legacy:
-        manufacturers, models = _split_legacy_device_matches(
-            cast("Iterable[Any]", legacy),
-            updated.get(CONF_EXCLUDED_MANUFACTURERS),
-            updated.get(CONF_EXCLUDED_MODELS),
-            device_manufacturers_cf,
-            device_models_cf,
-        )
-        if manufacturers or CONF_EXCLUDED_MANUFACTURERS in updated:
-            updated[CONF_EXCLUDED_MANUFACTURERS] = manufacturers
-        if models or CONF_EXCLUDED_MODELS in updated:
-            updated[CONF_EXCLUDED_MODELS] = models
-    return updated
-
-
-def _collect_registered_device_metadata(
-    hass: HomeAssistant,
-) -> tuple[list[str], list[str]]:
-    """Collect casefolded manufacturer and model strings from the device registry."""
-    device_manufacturers_cf: list[str] = []
-    device_models_cf: list[str] = []
-    try:
-        devices = getattr(dr.async_get(hass), "devices", None)
-        if not isinstance(devices, Mapping):
-            return device_manufacturers_cf, device_models_cf
-        for device in devices.values():
-            if (
-                isinstance(mfr := getattr(device, DEVICE_ATTR_MANUFACTURER, None), str)
-                and mfr
-            ):
-                device_manufacturers_cf.append(mfr.casefold())
-            if (
-                isinstance(model := getattr(device, DEVICE_ATTR_MODEL, None), str)
-                and model
-            ):
-                device_models_cf.append(model.casefold())
-    except (AttributeError, KeyError, RuntimeError, TypeError):
-        pass
-    return device_manufacturers_cf, device_models_cf
-
-
-def _migrate_excluded_device_matches(
-    hass: HomeAssistant, config_entry: ConfigEntry
-) -> None:
-    """Split legacy combined device-match filters into manufacturer and model lists."""
-    device_manufacturers_cf, device_models_cf = _collect_registered_device_metadata(
-        hass
-    )
-
-    if (
-        updated_options := _migrate_device_match_mapping(
-            config_entry.options, device_manufacturers_cf, device_models_cf
-        )
-    ) is not None:
-        _ = hass.config_entries.async_update_entry(
-            config_entry, options=updated_options
-        )
-
-    for subentry_id, data in iter_area_subentries(config_entry):
-        if (
-            updated_data := _migrate_device_match_mapping(
-                data, device_manufacturers_cf, device_models_cf
-            )
-        ) is not None:
-            _ = hass.config_entries.async_update_subentry(
-                config_entry,
-                config_entry.subentries[subentry_id],
-                data=updated_data,
-            )
-
-
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:  # noqa: C901
     """Migrate old entry to the new version.
 
@@ -981,34 +758,6 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             hass.config_entries.async_update_entry(config_entry, version=20)
             _LOGGER.debug(
                 "Migrated entry %s from v19 to v20 (motion timeout default)",
-                config_entry.entry_id,
-            )
-
-        # v20 -> v21: per-area light-power handling can follow global,
-        # explicitly exclude, or explicitly include.
-        if config_entry.version == 20:
-            _migrate_area_light_power_setting(hass, config_entry)
-            _ = hass.config_entries.async_update_entry(config_entry, version=21)
-            _LOGGER.debug(
-                "Migrated entry %s from v20 to v21 (area light-power setting)",
-                config_entry.entry_id,
-            )
-
-        # v21 -> v22: per-area group expansion can follow global or override it.
-        if config_entry.version == 21:
-            _migrate_area_group_expansion_setting(hass, config_entry)
-            _ = hass.config_entries.async_update_entry(config_entry, version=22)
-            _LOGGER.debug(
-                "Migrated entry %s from v21 to v22 (area group expansion)",
-                config_entry.entry_id,
-            )
-
-        # v22 -> v23: split legacy excluded_device_matches into manufacturer and model lists.
-        if config_entry.version == 22:
-            _migrate_excluded_device_matches(hass, config_entry)
-            _ = hass.config_entries.async_update_entry(config_entry, version=23)
-            _LOGGER.debug(
-                "Migrated entry %s from v22 to v23 (split device exclusions)",
                 config_entry.entry_id,
             )
 
