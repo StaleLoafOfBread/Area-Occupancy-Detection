@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Final, TypedDict, cast
+from typing import Any, Final, cast
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.group import DOMAIN as GROUP_DOMAIN
@@ -59,8 +59,6 @@ from .const import (
     CONF_EXCLUDE_REMOTE_LOCKS,
     CONF_EXCLUDE_VEHICLE_DETECTED,
     CONF_EXCLUDED_INTEGRATIONS,
-    CONF_EXCLUDED_MANUFACTURERS,
-    CONF_EXCLUDED_MODELS,
     CONF_EXCLUDED_SENSOR_TYPES,
     CONF_EXCLUDED_SENSORS,
     CONF_EXPAND_GROUPS,
@@ -86,11 +84,10 @@ from .const import (
     DISCOVERY_EXCLUSION_RULES,
     DISCOVERY_UNIQUE_ID_PREFIX,
     DOMAIN,
-    SENSOR_KEY_TO_TYPE_SLUG,
+    TYPE_SLUG_TO_SENSOR_KEY,
 )
 from .data.purpose import infer_purpose_from_name
 from .discovery_filters import (
-    ENTITY_ID_SEPARATOR,
     MOTION_BINARY_DEVICE_CLASSES,
     SpecialExclusionContext,
     collect_device_exclusion_filters,
@@ -98,16 +95,19 @@ from .discovery_filters import (
     entity_state_and_attributes,
     find_excluded_device_entity_ids,
     garage_cover_device_ids,
+    get_entity_registry,
     is_ineligible_entry,
     is_light_power_sensor,
-    is_own_entry,
     is_special_excluded_entry,
-    is_weather_entity,
-    lookup_registry_entry,
     main_motion_classes_by_device_in_area,
     normalize_excluded_platforms,
     resolve_entry_device_class,
-    state_attributes,
+)
+from .discovery_groups import (
+    expand_discovery_group,
+    expand_manual_group,
+    get_group_members,
+    group_contains_own_entity,
 )
 
 # Only unambiguous classes are automatic. Generic opening contacts, switches,
@@ -141,6 +141,9 @@ _DOMAINS: Final[dict[str, str]] = {
     Platform.LOCK: CONF_LOCK_SENSORS,
     Platform.COVER: CONF_COVER_SENSORS,
 }
+_DISCOVERABLE_ENTRY_DOMAINS: Final[frozenset[str]] = frozenset(
+    {GROUP_DOMAIN, Platform.BINARY_SENSOR, Platform.SENSOR, *_DOMAINS}
+)
 
 DISCOVERABLE_SENSOR_KEYS: Final[tuple[str, ...]] = tuple(
     dict.fromkeys(
@@ -192,34 +195,17 @@ _ATTR_FLOW: Final = "flow"
 _ATTR_DATA: Final = "data"
 
 
-class AreaDiscoveryKwargs(TypedDict):
-    """Keyword arguments passed from area config to ``discover_area_sensors``."""
-
-    expand_groups: str
-    enabled_domains: Collection[str]
-    excluded_platforms: Collection[str] | None
-    exclude_light_power: str
-    exclude_occupancy_subzones: str
-    exclude_remote_locks: str
-    exclude_vehicle_detected: str
-    excluded_entities: Collection[str]
-    global_options: Mapping[str, Any]
-    precomputed_device_exclusions: bool
-
-
 @dataclass(frozen=True, slots=True)
-class _AreaDiscoveryOptions:
-    """Normalized inputs for building area discovery filters."""
+class AreaDiscoveryOptions:
+    """Normalized options for scanning discoverable sensors in one area."""
 
-    expand_groups: str
-    enabled_domains: Collection[str] | None
-    excluded_platforms: Collection[str] | None
-    exclusion_overrides: Mapping[str, str]
-    excluded_manufacturers: Collection[str] | None
-    excluded_models: Collection[str] | None
-    excluded_entities: Collection[str] | None
-    global_options: Mapping[str, Any]
-    precomputed_device_exclusions: bool
+    expand_groups: str = DEFAULT_AREA_EXPAND_GROUPS
+    enabled_domains: Collection[str] | None = None
+    excluded_platforms: Collection[str] | None = None
+    exclusion_overrides: Mapping[str, str] = field(default_factory=dict)
+    excluded_entities: Collection[str] | None = None
+    global_options: Mapping[str, Any] = field(default_factory=dict)
+    precomputed_device_exclusions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,132 +250,25 @@ def is_auto_discovery_enabled(data: Mapping[str, Any]) -> bool:
 def _excluded_sensor_keys(global_options: Mapping[str, Any]) -> set[str]:
     """Return area config keys covered by global sensor type exclusions."""
     excluded_types = global_options.get(CONF_EXCLUDED_SENSOR_TYPES) or ()
-    normalized = {item for item in excluded_types if isinstance(item, str)}
     return {
         key
-        for key, sensor_type in SENSOR_KEY_TO_TYPE_SLUG.items()
-        if sensor_type in normalized
+        for sensor_type in excluded_types
+        if isinstance(sensor_type, str)
+        and (key := TYPE_SLUG_TO_SENSOR_KEY.get(sensor_type)) is not None
     }
 
 
 def _get_entity_registry(hass: HomeAssistant) -> er.EntityRegistry | None:
-    """Safely look up the entity registry without failing on bare mocks."""
+    """Safely look up the entity registry via ``discovery.er.async_get``."""
+    return get_entity_registry(hass, async_get=er.async_get)
+
+
+def _get_device_registry(hass: HomeAssistant) -> dr.DeviceRegistry | None:
+    """Safely look up the device registry via ``discovery.dr.async_get``."""
     try:
-        return er.async_get(hass)
+        return dr.async_get(hass)
     except (AttributeError, KeyError, RuntimeError, TypeError):
         return None
-
-
-def _get_group_members(hass: HomeAssistant, entity_id: str) -> list[str] | None:
-    """Return member entity IDs if ``entity_id`` is a group, otherwise ``None``."""
-    attrs = state_attributes(hass, entity_id)
-    members = attrs.get(ATTR_ENTITY_ID) if attrs else None
-    if not isinstance(members, (list, tuple)):
-        return None
-    return [
-        member
-        for member in cast("list[Any] | tuple[Any, ...]", members)
-        if isinstance(member, str) and ENTITY_ID_SEPARATOR in member
-    ]
-
-
-def _is_own_entity(
-    hass: HomeAssistant,
-    entity_id: str,
-    registry: er.EntityRegistry | None = None,
-) -> bool:
-    """Return True if ``entity_id`` belongs to this integration."""
-    entry = lookup_registry_entry(entity_id, registry, hass=hass)
-    return entry is not None and is_own_entry(entry)
-
-
-def _group_contains_own_entity(
-    hass: HomeAssistant,
-    entity_id: str,
-    registry: er.EntityRegistry | None = None,
-    _visited: frozenset[str] | None = None,
-) -> bool:
-    """Return True if a group directly or recursively contains an own entity."""
-    visited = _visited if _visited is not None else frozenset()
-    if entity_id in visited:
-        return False
-
-    members = _get_group_members(hass, entity_id)
-    if members is None:
-        return _is_own_entity(hass, entity_id, registry)
-
-    next_visited = visited | {entity_id}
-    return any(
-        _group_contains_own_entity(hass, member_id, registry, next_visited)
-        for member_id in members
-    )
-
-
-def _expand_group_entity(
-    hass: HomeAssistant,
-    entity_id: str,
-    required_domain: str | None = None,
-    _visited: frozenset[str] | None = None,
-    *,
-    registry: er.EntityRegistry | None = None,
-    excluded_entity_ids: Collection[str] = (),
-    excluded_platforms: set[str] | None = None,
-) -> list[str]:
-    """Expand a group entity recursively into domain-filtered member entity IDs."""
-    visited = _visited if _visited is not None else frozenset()
-    if entity_id in visited or entity_id in excluded_entity_ids:
-        return []
-
-    members = _get_group_members(hass, entity_id)
-    if members is None:
-        if _is_own_entity(hass, entity_id, registry):
-            return []
-        if required_domain is not None and entity_domain(entity_id) != required_domain:
-            return []
-        return [entity_id]
-
-    if visited and excluded_platforms is not None:
-        entry = lookup_registry_entry(entity_id, registry, hass=hass)
-        if entry is not None and is_ineligible_entry(hass, entry, excluded_platforms):
-            return []
-
-    effective_domain = required_domain
-    group_domain = entity_domain(entity_id)
-    if effective_domain is None and group_domain != GROUP_DOMAIN:
-        effective_domain = group_domain
-
-    next_visited = visited | {entity_id}
-    expanded: list[str] = []
-    for member_id in members:
-        expanded.extend(
-            _expand_group_entity(
-                hass,
-                member_id,
-                required_domain=effective_domain,
-                _visited=next_visited,
-                registry=registry,
-                excluded_entity_ids=excluded_entity_ids,
-                excluded_platforms=excluded_platforms,
-            )
-        )
-    return list(dict.fromkeys(expanded))
-
-
-def excluded_device_entity_ids(
-    hass: HomeAssistant,
-    *,
-    manufacturers: Collection[str] | None = None,
-    models: Collection[str] | None = None,
-) -> set[str]:
-    """Return entity IDs whose device manufacturer or model matches a filter."""
-    registry = er.async_get(hass)
-    devices = dr.async_get(hass)
-    return find_excluded_device_entity_ids(
-        registry,
-        devices,
-        manufacturers=manufacturers,
-        models=models,
-    )
 
 
 def collect_excluded_sensor_ids(
@@ -419,8 +298,13 @@ def resolve_excluded_device_entity_ids(
     manufacturers, models = collect_device_exclusion_filters(area_data, global_options)
     if not manufacturers and not models:
         return set()
-    return excluded_device_entity_ids(
-        hass,
+    registry = _get_entity_registry(hass)
+    devices = _get_device_registry(hass)
+    if registry is None or devices is None:
+        return set()
+    return find_excluded_device_entity_ids(
+        registry,
+        devices,
         manufacturers=manufacturers,
         models=models,
     )
@@ -454,20 +338,13 @@ def _classify_entity(
     registry: er.EntityRegistry,
     entity_id: str,
     *,
-    entry: er.RegistryEntry | None = None,
+    entry: er.RegistryEntry | None,
     fallback_domain: str | None = None,
     fallback_device_class: str | None = None,
-    excluded_platforms: set[str] | None = None,
     exclude_light_power: bool,
-    check_eligibility: bool = True,
 ) -> str | None:
-    """Classify an entity ID into a sensor config key, or ``None`` if ineligible."""
-    excluded = excluded_platforms or set()
-    if entry is None:
-        entry = lookup_registry_entry(entity_id, registry, hass=hass)
+    """Classify an eligible entity ID into a sensor config key, or ``None``."""
     if entry is not None:
-        if check_eligibility and is_ineligible_entry(hass, entry, excluded):
-            return None
         domain = entry.domain
         device_class = resolve_entry_device_class(
             hass,
@@ -477,8 +354,6 @@ def _classify_entity(
             fallback_device_class=fallback_device_class,
         )
     else:
-        if is_weather_entity(entity_id, None):
-            return None
         state, attrs = entity_state_and_attributes(hass, entity_id)
         if state is None:
             return None
@@ -569,7 +444,7 @@ def _resolve_excluded_platforms(
 
 def _build_area_discovery_filters(
     hass: HomeAssistant,
-    options: _AreaDiscoveryOptions,
+    options: AreaDiscoveryOptions,
 ) -> _AreaDiscoveryFilters:
     """Resolve area and global options into a single discovery filter bundle."""
     global_options = options.global_options
@@ -578,12 +453,8 @@ def _build_area_discovery_filters(
             options.excluded_entities, global_options
         )
     else:
-        device_filter_data = {
-            CONF_EXCLUDED_MANUFACTURERS: options.excluded_manufacturers,
-            CONF_EXCLUDED_MODELS: options.excluded_models,
-        }
         excluded_entity_ids = _resolve_all_excluded_entities(
-            hass, options.excluded_entities, device_filter_data, global_options
+            hass, options.excluded_entities, {}, global_options
         )
 
     return _AreaDiscoveryFilters(
@@ -669,116 +540,6 @@ def _build_area_scan_context(
     )
 
 
-def _member_matches_group_classification(
-    hass: HomeAssistant,
-    member_id: str,
-    *,
-    member_entry: er.RegistryEntry | None,
-    expected_domain: str,
-    expected_key: str,
-) -> bool:
-    """Return True if a member's own classification matches the enclosing group."""
-    if member_entry is not None:
-        member_domain = member_entry.domain
-        member_dc = resolve_entry_device_class(hass, member_entry, member_id)
-    else:
-        state, attrs = entity_state_and_attributes(hass, member_id)
-        if state is None:
-            return True
-        member_domain = entity_domain(member_id)
-        member_dc = resolve_entry_device_class(hass, None, member_id, attrs=attrs)
-
-    if member_dc is None:
-        return member_domain == expected_domain
-    return _map_sensor_key(member_domain, member_dc) == expected_key
-
-
-def _is_eligible_expanded_member(
-    hass: HomeAssistant,
-    member_id: str,
-    member_entry: er.RegistryEntry | None,
-    scan_ctx: _AreaScanContext,
-) -> bool:
-    """Return True if an expanded group member is eligible for area discovery."""
-    if member_entry is not None:
-        return not is_ineligible_entry(
-            hass, member_entry, scan_ctx.filters.excluded_platforms
-        ) and not is_special_excluded_entry(
-            hass, member_entry, scan_ctx.special_exclusions
-        )
-    if is_weather_entity(member_id, None):
-        return False
-    state, _ = entity_state_and_attributes(hass, member_id)
-    return state is not None
-
-
-def _expand_and_collect_group(
-    hass: HomeAssistant,
-    registry: er.EntityRegistry,
-    entry: er.RegistryEntry,
-    scan_ctx: _AreaScanContext,
-    discovered: dict[str, list[str]],
-) -> bool:
-    """Expand a group registry entry when its members match its classification.
-
-    Returns ``True`` if the group was expanded (or skipped as a non-discoverable
-    typed group only via fallback), or ``False`` when the caller should fall
-    through to evaluate the group entity itself.
-    """
-    filters = scan_ctx.filters
-    required_domain = entry.domain if entry.domain != GROUP_DOMAIN else None
-    group_dc = resolve_entry_device_class(hass, entry)
-    group_key = _map_sensor_key(entry.domain, group_dc)
-    if entry.domain != GROUP_DOMAIN and group_dc is not None and group_key is None:
-        return False
-
-    eligible_members: list[tuple[str, er.RegistryEntry | None]] = []
-    for member_id in _expand_group_entity(
-        hass,
-        entry.entity_id,
-        required_domain=required_domain,
-        registry=registry,
-        excluded_entity_ids=filters.excluded_entity_ids,
-        excluded_platforms=filters.excluded_platforms,
-    ):
-        member_entry = lookup_registry_entry(member_id, registry, hass=hass)
-        if _is_eligible_expanded_member(hass, member_id, member_entry, scan_ctx):
-            eligible_members.append((member_id, member_entry))
-
-    if (
-        entry.domain != GROUP_DOMAIN
-        and group_dc is not None
-        and group_key is not None
-        and any(
-            not _member_matches_group_classification(
-                hass,
-                member_id,
-                member_entry=member_entry,
-                expected_domain=entry.domain,
-                expected_key=group_key,
-            )
-            for member_id, member_entry in eligible_members
-        )
-    ):
-        return False
-
-    exclude_light_power = filters.is_excluded(CONF_EXCLUDE_LIGHT_POWER)
-    for member_id, member_entry in eligible_members:
-        key = _classify_entity(
-            hass,
-            registry,
-            member_id,
-            entry=member_entry,
-            fallback_domain=entry.domain,
-            fallback_device_class=group_dc,
-            excluded_platforms=filters.excluded_platforms,
-            exclude_light_power=exclude_light_power,
-            check_eligibility=False,
-        )
-        _append_discovered(discovered, filters, key, member_id)
-    return True
-
-
 def _discover_entry_sensors(
     hass: HomeAssistant,
     registry: er.EntityRegistry,
@@ -787,6 +548,8 @@ def _discover_entry_sensors(
     discovered: dict[str, list[str]],
 ) -> None:
     """Classify a single area registry entry and append any discovered sensors."""
+    if entry.domain not in _DISCOVERABLE_ENTRY_DOMAINS:
+        return
     filters = scan_ctx.filters
     if entry.entity_id in filters.excluded_entity_ids:
         return
@@ -795,15 +558,31 @@ def _discover_entry_sensors(
     if is_special_excluded_entry(hass, entry, scan_ctx.special_exclusions):
         return
 
-    is_group = _get_group_members(hass, entry.entity_id) is not None
-    if (
-        filters.expand_groups
-        and is_group
-        and _expand_and_collect_group(hass, registry, entry, scan_ctx, discovered)
-    ):
+    exclude_light_power = filters.is_excluded(CONF_EXCLUDE_LIGHT_POWER)
+    is_group = get_group_members(hass, entry.entity_id) is not None
+    if filters.expand_groups and is_group:
+        for member in expand_discovery_group(
+            hass,
+            entry,
+            registry=registry,
+            map_sensor_key=_map_sensor_key,
+            excluded_entity_ids=filters.excluded_entity_ids,
+            excluded_platforms=filters.excluded_platforms,
+            special_exclusions=scan_ctx.special_exclusions,
+        ):
+            key = _classify_entity(
+                hass,
+                registry,
+                member.entity_id,
+                entry=member.entry,
+                fallback_domain=member.fallback_domain,
+                fallback_device_class=member.fallback_device_class,
+                exclude_light_power=exclude_light_power,
+            )
+            _append_discovered(discovered, filters, key, member.entity_id)
         return
 
-    if is_group and _group_contains_own_entity(hass, entry.entity_id, registry):
+    if is_group and group_contains_own_entity(hass, entry.entity_id, registry):
         return
 
     key = _classify_entity(
@@ -811,9 +590,7 @@ def _discover_entry_sensors(
         registry,
         entry.entity_id,
         entry=entry,
-        excluded_platforms=filters.excluded_platforms,
-        exclude_light_power=filters.is_excluded(CONF_EXCLUDE_LIGHT_POWER),
-        check_eligibility=False,
+        exclude_light_power=exclude_light_power,
     )
     _append_discovered(discovered, filters, key, entry.entity_id)
 
@@ -822,48 +599,30 @@ def discover_area_sensors(
     hass: HomeAssistant,
     area_id: str | None,
     *,
-    expand_groups: str = DEFAULT_AREA_EXPAND_GROUPS,
-    enabled_domains: Collection[str] | None = None,
-    excluded_platforms: Collection[str] | None = None,
-    exclude_light_power: str = DEFAULT_AREA_EXCLUSION_SETTING,
-    exclude_occupancy_subzones: str = DEFAULT_AREA_EXCLUSION_SETTING,
-    exclude_remote_locks: str = DEFAULT_AREA_EXCLUSION_SETTING,
-    exclude_vehicle_detected: str = DEFAULT_AREA_EXCLUSION_SETTING,
-    excluded_manufacturers: Collection[str] | None = None,
-    excluded_models: Collection[str] | None = None,
-    excluded_entities: Collection[str] | None = None,
+    options: AreaDiscoveryOptions | None = None,
     global_options: Mapping[str, Any] | None = None,
-    precomputed_device_exclusions: bool = False,
 ) -> dict[str, list[str]]:
     """Return eligible discoverable entities grouped by sensor config key for an area.
 
     Disabled, diagnostic/config, integration-owned, outdoor weather, and
     excluded-integration entities are skipped. Group expansion follows the
     global setting unless explicitly overridden by the area. When
-    ``enabled_domains`` is given, only matching sensor config keys are returned.
-    Area exclusion settings follow or override their global counterparts.
+    ``options.enabled_domains`` is given, only matching sensor config keys are
+    returned. Area exclusion settings follow or override their global
+    counterparts.
     """
-    if not area_id or (enabled_domains is not None and not enabled_domains):
+    effective_options = (
+        options
+        if options is not None
+        else AreaDiscoveryOptions(global_options=global_options or {})
+    )
+    if not area_id or (
+        effective_options.enabled_domains is not None
+        and not effective_options.enabled_domains
+    ):
         return {}
 
-    options = _AreaDiscoveryOptions(
-        expand_groups=expand_groups,
-        enabled_domains=enabled_domains,
-        excluded_platforms=excluded_platforms,
-        exclusion_overrides={
-            CONF_EXCLUDE_LIGHT_POWER: exclude_light_power,
-            CONF_EXCLUDE_OCCUPANCY_SUBZONES: exclude_occupancy_subzones,
-            CONF_EXCLUDE_REMOTE_LOCKS: exclude_remote_locks,
-            CONF_EXCLUDE_VEHICLE_DETECTED: exclude_vehicle_detected,
-        },
-        excluded_manufacturers=excluded_manufacturers,
-        excluded_models=excluded_models,
-        excluded_entities=excluded_entities,
-        global_options=global_options or {},
-        precomputed_device_exclusions=precomputed_device_exclusions,
-    )
-    filters = _build_area_discovery_filters(hass, options)
-
+    filters = _build_area_discovery_filters(hass, effective_options)
     registry = er.async_get(hass)
     devices = dr.async_get(hass)
     area_entries = _collect_area_entries(registry, devices, area_id)
@@ -906,31 +665,27 @@ def parse_tracked_auto_sensors(
     return tracked_auto
 
 
-def build_area_discovery_kwargs(
+def build_area_discovery_options(
     area_data: Mapping[str, Any],
     *,
     enabled_domains: Collection[str],
     excluded_entities: Collection[str],
     global_options: Mapping[str, Any],
-) -> AreaDiscoveryKwargs:
-    """Build shared keyword arguments for ``discover_area_sensors``."""
-    exclusion_kwargs = {
-        rule.config_key: area_data.get(rule.config_key, DEFAULT_AREA_EXCLUSION_SETTING)
-        for rule in DISCOVERY_EXCLUSION_RULES
-    }
-    return cast(
-        "AreaDiscoveryKwargs",
-        {
-            CONF_EXPAND_GROUPS: area_data.get(
-                CONF_EXPAND_GROUPS, DEFAULT_AREA_EXPAND_GROUPS
-            ),
-            "enabled_domains": enabled_domains,
-            "excluded_platforms": area_data.get(CONF_EXCLUDED_INTEGRATIONS),
-            **exclusion_kwargs,
-            "excluded_entities": excluded_entities,
-            "global_options": global_options,
-            "precomputed_device_exclusions": True,
+) -> AreaDiscoveryOptions:
+    """Build shared ``AreaDiscoveryOptions`` for ``discover_area_sensors``."""
+    return AreaDiscoveryOptions(
+        expand_groups=area_data.get(CONF_EXPAND_GROUPS, DEFAULT_AREA_EXPAND_GROUPS),
+        enabled_domains=enabled_domains,
+        excluded_platforms=area_data.get(CONF_EXCLUDED_INTEGRATIONS),
+        exclusion_overrides={
+            rule.config_key: area_data.get(
+                rule.config_key, DEFAULT_AREA_EXCLUSION_SETTING
+            )
+            for rule in DISCOVERY_EXCLUSION_RULES
         },
+        excluded_entities=excluded_entities,
+        global_options=global_options,
+        precomputed_device_exclusions=True,
     )
 
 
@@ -956,42 +711,36 @@ def _expand_manual_groups(
     hass: HomeAssistant,
     resolved: dict[str, Any],
     excluded: set[str],
+    tracked_auto: Mapping[str, Collection[str]] | None = None,
 ) -> None:
-    """Expand configured group entities in place across sensor keys."""
+    """Expand manually configured group entities in place across sensor keys."""
     registry = _get_entity_registry(hass)
+    tracked_by_key = tracked_auto or {}
     for key in ALL_AREA_SENSOR_KEYS:
         existing = resolved.get(key)
         if not isinstance(existing, list):
             continue
+        tracked_for_key = set(tracked_by_key.get(key, ()))
         expected_domain = _KEY_EXPECTED_DOMAINS.get(key)
         expanded: list[str] = []
         for entity_id in cast("list[Any]", existing):
             if not isinstance(entity_id, str) or entity_id in excluded:
                 continue
-            if _get_group_members(hass, entity_id) is not None:
-                member_ids = _expand_group_entity(
-                    hass,
-                    entity_id,
-                    required_domain=expected_domain,
-                    registry=registry,
-                    excluded_entity_ids=excluded,
-                )
-                if expected_domain is not None and any(
-                    not _member_matches_group_classification(
+            if (
+                entity_id not in tracked_for_key
+                and get_group_members(hass, entity_id) is not None
+            ):
+                expanded.extend(
+                    expand_manual_group(
                         hass,
-                        member_id,
-                        member_entry=lookup_registry_entry(
-                            member_id, registry, hass=hass
-                        ),
+                        entity_id,
                         expected_domain=expected_domain,
                         expected_key=key,
+                        registry=registry,
+                        excluded_entity_ids=excluded,
+                        map_sensor_key=_map_sensor_key,
                     )
-                    for member_id in member_ids
-                ):
-                    if not _group_contains_own_entity(hass, entity_id, registry):
-                        expanded.append(entity_id)
-                else:
-                    expanded.extend(member_ids)
+                )
             else:
                 expanded.append(entity_id)
         resolved[key] = list(dict.fromkeys(expanded))
@@ -1039,14 +788,14 @@ def _strip_stale_auto_sensors(
 def _reconcile_auto_provenance(
     previously_auto: Collection[str],
     additions: Collection[str],
-    eligible_discovered: set[str],
+    eligible_and_present: set[str],
 ) -> list[str]:
-    """Return ordered auto-added entity IDs still eligible after discovery."""
+    """Return ordered auto-added entity IDs still eligible and present."""
     return list(
         dict.fromkeys(
             entity_id
             for entity_id in (*previously_auto, *additions)
-            if entity_id in eligible_discovered
+            if entity_id in eligible_and_present
         )
     )
 
@@ -1074,8 +823,12 @@ def _merge_discovered_additions(
         ]
         if additions:
             resolved[key] = [*(resolved.get(key) or ()), *additions]
+            existing_entities.update(additions)
+        present_in_key = set(resolved.get(key) or ())
         cleaned = _reconcile_auto_provenance(
-            tracked_auto.get(key, ()), additions, set(entity_ids)
+            tracked_auto.get(key, ()),
+            additions,
+            set(entity_ids) & present_in_key,
         )
         if cleaned:
             resolved_auto[key] = cleaned
@@ -1133,7 +886,7 @@ def resolve_area_sensors(
     )
 
     if expand_groups:
-        _expand_manual_groups(hass, resolved, excluded)
+        _expand_manual_groups(hass, resolved, excluded, tracked_auto)
     _strip_excluded_entities(resolved, tracked_auto, excluded)
 
     enabled_domains = get_enabled_discovery_domains(data)
@@ -1150,7 +903,7 @@ def resolve_area_sensors(
     discovered = discover_area_sensors(
         hass,
         data[CONF_AREA_ID],
-        **build_area_discovery_kwargs(
+        options=build_area_discovery_options(
             data,
             enabled_domains=enabled_domains,
             excluded_entities=excluded,
@@ -1271,6 +1024,14 @@ def discover_eligible_areas(
     global_options: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Return suggested configs for unconfigured HA areas with motion sensors."""
+    global_opts = global_options or {}
+    excluded_devices = resolve_excluded_device_entity_ids(hass, {}, global_opts)
+    motion_options = AreaDiscoveryOptions(
+        enabled_domains=(CONF_MOTION_SENSORS,),
+        excluded_entities=excluded_devices,
+        global_options=global_opts,
+        precomputed_device_exclusions=True,
+    )
     suggestions: list[dict[str, Any]] = []
     for area in _iter_sorted_areas(hass):
         area_id = getattr(area, ATTR_ID, None)
@@ -1280,7 +1041,11 @@ def discover_eligible_areas(
             or (excluded_area_ids and area_id in excluded_area_ids)
         ):
             continue
-        discovered = discover_area_sensors(hass, area_id, global_options=global_options)
+        discovered = discover_area_sensors(
+            hass,
+            area_id,
+            options=motion_options,
+        )
         if discovered.get(CONF_MOTION_SENSORS):
             raw_area_name = getattr(area, ATTR_NAME, None)
             suggestions.append(
@@ -1375,9 +1140,14 @@ def async_trigger_area_discoveries(hass: HomeAssistant) -> None:
     configured_area_ids, ignored_unique_ids, active_entry = _collect_entry_state(
         cast("list[ConfigEntry]", entries)
     )
+    ignored_area_ids = {
+        uid.removeprefix(DISCOVERY_UNIQUE_ID_PREFIX)
+        for uid in ignored_unique_ids
+        if uid.startswith(DISCOVERY_UNIQUE_ID_PREFIX)
+    }
     eligible = discover_eligible_areas(
         hass,
-        excluded_area_ids=configured_area_ids,
+        excluded_area_ids=configured_area_ids | ignored_area_ids,
         global_options=active_entry.options if active_entry else None,
     )
     eligible_ids = {cfg[CONF_AREA_ID] for cfg in eligible}
@@ -1419,15 +1189,34 @@ class _DiscoveryRefreshDebouncer:
         self._hass = hass
         self._refresh = refresh
         self._cancel_pending: Callable[[], None] | None = None
+        self._pending_input_refresh = False
+        self._pending_area_discovery = False
 
     async def _run_refresh(self, _now: datetime) -> None:
+        run_input_refresh = self._pending_input_refresh
+        run_area_discovery = self._pending_area_discovery
         self._cancel_pending = None
-        await self._refresh()
-        async_trigger_area_discoveries(self._hass)
+        self._pending_input_refresh = False
+        self._pending_area_discovery = False
+        if run_input_refresh:
+            await self._refresh()
+        if run_area_discovery:
+            async_trigger_area_discoveries(self._hass)
 
     @callback
-    def schedule(self) -> None:
-        """Schedule a debounced discovery refresh, replacing any pending timer."""
+    def schedule(
+        self,
+        *,
+        refresh_inputs: bool = False,
+        trigger_area_discovery: bool = True,
+    ) -> None:
+        """Schedule a debounced discovery update, coalescing pending flags."""
+        self._pending_input_refresh = self._pending_input_refresh or refresh_inputs
+        self._pending_area_discovery = (
+            self._pending_area_discovery or trigger_area_discovery
+        )
+        if not self._pending_input_refresh and not self._pending_area_discovery:
+            return
         if self._cancel_pending is not None:
             self._cancel_pending()
         self._cancel_pending = async_call_later(
@@ -1440,6 +1229,8 @@ class _DiscoveryRefreshDebouncer:
         if self._cancel_pending is not None:
             self._cancel_pending()
             self._cancel_pending = None
+        self._pending_input_refresh = False
+        self._pending_area_discovery = False
 
 
 @callback
@@ -1453,17 +1244,22 @@ def async_track_discovery(
 
     @callback
     def registry_changed(event: Event[Any]) -> None:
-        if _has_discovery_enabled(entry) and _is_relevant_registry_event(event):
-            debouncer.schedule()
+        if _is_relevant_registry_event(event):
+            debouncer.schedule(
+                refresh_inputs=_has_discovery_enabled(entry),
+                trigger_area_discovery=True,
+            )
 
     @callback
     def ha_started(_event: Event[Any]) -> None:
-        if _has_discovery_enabled(entry):
-            debouncer.schedule()
+        debouncer.schedule(
+            refresh_inputs=_has_discovery_enabled(entry),
+            trigger_area_discovery=True,
+        )
 
     @callback
     def area_registry_changed(_event: Event[Any]) -> None:
-        debouncer.schedule()
+        debouncer.schedule(refresh_inputs=False, trigger_area_discovery=True)
 
     entry.async_on_unload(debouncer.cancel)
     entry.async_on_unload(

@@ -258,7 +258,6 @@ from .const import (
     get_sensor_type_mapping,
     get_state_options,
 )
-from .data.entity_type import InputType
 from .data.purpose import (
     PURPOSE_DEFINITIONS,
     AreaPurpose,
@@ -271,7 +270,7 @@ from .discovery import (
     DISCOVERABLE_SENSOR_KEYS,
     area_discovery_unique_id,
     async_trigger_area_discoveries,
-    build_area_discovery_kwargs,
+    build_area_discovery_options,
     build_suggested_area_config,
     collect_excluded_sensor_ids,
     discover_area_sensors,
@@ -579,9 +578,7 @@ def _get_excluded_sensor_type_options() -> list[str]:
     """Return ordered sensor type choices grouped like manual configuration."""
     sensor_types = get_sensor_type_mapping()
     return [
-        sensor_type
-        for sensor_type in _SENSOR_TYPE_ORDER
-        if sensor_type in sensor_types and sensor_type != InputType.SLEEP
+        sensor_type for sensor_type in _SENSOR_TYPE_ORDER if sensor_type in sensor_types
     ]
 
 
@@ -2206,7 +2203,7 @@ def _draft_to_suggested(draft: dict[str, Any], keys: set[str]) -> dict[str, Any]
 def _strip_excluded_sensors_from_draft(
     draft: dict[str, Any], excluded: set[str]
 ) -> dict[str, Any]:
-    """Return updated sensor list entries with excluded entities removed."""
+    """Return updated sensor list and provenance entries with exclusions removed."""
     if not excluded:
         return {}
     stripped: dict[str, Any] = {}
@@ -2216,6 +2213,24 @@ def _strip_excluded_sensors_from_draft(
             items = cast("list[Any]", existing)
             if any(item in excluded for item in items):
                 stripped[key] = [item for item in items if item not in excluded]
+    if CONF_AUTO_ADDED_SENSORS in draft:
+        tracked_auto = parse_tracked_auto_sensors(draft)
+        if any(
+            entity_id in excluded
+            for entity_ids in tracked_auto.values()
+            for entity_id in entity_ids
+        ):
+            stripped[CONF_AUTO_ADDED_SENSORS] = {
+                key: filtered
+                for key, entity_ids in tracked_auto.items()
+                if (
+                    filtered := [
+                        entity_id
+                        for entity_id in entity_ids
+                        if entity_id not in excluded
+                    ]
+                )
+            }
     return stripped
 
 
@@ -2252,7 +2267,7 @@ def _discover_for_sync(
     return discover_area_sensors(
         hass,
         draft[CONF_AREA_ID],
-        **build_area_discovery_kwargs(
+        options=build_area_discovery_options(
             draft,
             enabled_domains=enabled_domains,
             excluded_entities=excluded_entities,
@@ -2265,24 +2280,19 @@ def _reconcile_sensor_key_selection(
     *,
     chosen: list[str],
     eligible_list: list[str],
-    previous_auto: set[str],
-    previous_selected: list[str],
     excluded: Collection[str],
-    excluded_devices: set[str],
+    hard_excluded: set[str],
 ) -> tuple[list[str], list[str], set[str]]:
     """Separate explicit selections from auto-added entities for one sensor key."""
-    eligible = set(eligible_list)
     excluded_set = set(excluded)
-    previous_explicit = set(previous_selected) - previous_auto
     re_included: set[str] = set()
     explicit_ids: list[str] = []
     for entity_id in chosen:
-        if entity_id in excluded_devices:
+        if entity_id in hard_excluded:
             continue
         if entity_id in excluded_set:
             re_included.add(entity_id)
-        if entity_id in previous_explicit or entity_id not in eligible:
-            explicit_ids.append(entity_id)
+        explicit_ids.append(entity_id)
 
     effective_excluded = excluded_set - re_included
     auto_ids = [
@@ -2306,6 +2316,7 @@ def _sync_discovered_and_excluded(
     global_options = global_options or {}
 
     excluded_devices = resolve_excluded_device_entity_ids(hass, draft, global_options)
+    hard_excluded = excluded_devices | collect_excluded_sensor_ids((), global_options)
     discovered = _discover_for_sync(
         hass,
         draft,
@@ -2325,10 +2336,8 @@ def _sync_discovered_and_excluded(
         merged, auto_ids, re_included = _reconcile_sensor_key_selection(
             chosen=list(dict.fromkeys(updated.get(key) or [])),
             eligible_list=discovered.get(key, []),
-            previous_auto=set(tracked_auto.get(key, ())),
-            previous_selected=draft.get(key) or [],
             excluded=excluded,
-            excluded_devices=excluded_devices,
+            hard_excluded=hard_excluded,
         )
         if re_included:
             excluded = [
@@ -3386,11 +3395,24 @@ class BaseOccupancyFlow(_FlowBase):
 
             if not errors:
                 updates = dict(flattened_input)
+                strip_ids: set[str] = set()
                 if CONF_EXCLUDED_SENSORS in updates:
-                    excluded_set = set(updates.get(CONF_EXCLUDED_SENSORS) or [])
+                    strip_ids.update(updates.get(CONF_EXCLUDED_SENSORS) or [])
+                if (
+                    CONF_EXCLUDED_MANUFACTURERS in updates
+                    or CONF_EXCLUDED_MODELS in updates
+                ):
+                    strip_ids.update(
+                        resolve_excluded_device_entity_ids(
+                            self.hass,
+                            {**self._area_config_draft, **updates},
+                            self._get_global_options(),
+                        )
+                    )
+                if strip_ids:
                     updates.update(
                         _strip_excluded_sensors_from_draft(
-                            self._area_config_draft, excluded_set
+                            self._area_config_draft, strip_ids
                         )
                     )
                 if self._editing_single_section:
@@ -4194,7 +4216,7 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
             apply_purpose_based_decay_default(
                 candidate,
                 candidate.get(CONF_PURPOSE),
-                self._get_global_purpose_decay_half_lives(),
+                parse_global_purpose_decay_half_lives(global_options),
             )
             errors.update(self._validate_config(candidate, self.hass, global_options))
 

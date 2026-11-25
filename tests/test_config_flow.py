@@ -50,6 +50,7 @@ from custom_components.area_occupancy.config_flow import (
     _is_weather_entity,
     _nest_config_for_sections,
     _normalize_basics_submission,
+    _strip_excluded_sensors_from_draft,
     _sync_discovered_and_excluded,
 )
 from custom_components.area_occupancy.config_helpers import (
@@ -3494,6 +3495,93 @@ def test_sync_drops_explicit_device_matches_when_excluded() -> None:
     assert synced[CONF_MOTION_SENSORS] == ["binary_sensor.room_motion"]
 
 
+def test_sync_drops_globally_excluded_sensors_from_explicit_choices() -> None:
+    """Global entity exclusions cannot be retained via explicit sensor selections."""
+    hass = Mock()
+    draft = {CONF_AREA_ID: "office", CONF_AUTO_DISCOVER_SENSORS: True}
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.discover_area_sensors",
+        return_value={},
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            {
+                CONF_MOTION_SENSORS: [
+                    "binary_sensor.global_excluded",
+                    "binary_sensor.keep_motion",
+                ]
+            },
+            (CONF_MOTION_SENSORS,),
+            global_options={
+                CONF_EXCLUDED_SENSORS: ["binary_sensor.global_excluded"],
+            },
+        )
+
+    assert synced[CONF_MOTION_SENSORS] == ["binary_sensor.keep_motion"]
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {}
+
+
+def test_sync_pins_explicitly_selected_auto_added_sensor() -> None:
+    """Submitting a previously auto-added sensor pins it as explicit."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_MOTION_SENSORS: ["binary_sensor.auto_one"],
+        CONF_AUTO_ADDED_SENSORS: {CONF_MOTION_SENSORS: ["binary_sensor.auto_one"]},
+    }
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.discover_area_sensors",
+        return_value={
+            CONF_MOTION_SENSORS: [
+                "binary_sensor.auto_one",
+                "binary_sensor.auto_two",
+            ]
+        },
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            {CONF_MOTION_SENSORS: ["binary_sensor.auto_one"]},
+            (CONF_MOTION_SENSORS,),
+        )
+
+    assert synced[CONF_MOTION_SENSORS] == [
+        "binary_sensor.auto_one",
+        "binary_sensor.auto_two",
+    ]
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_MOTION_SENSORS: ["binary_sensor.auto_two"]
+    }
+
+
+def test_strip_excluded_sensors_from_draft_updates_lists_and_provenance() -> None:
+    """Stripping exclusions cleans only populated sensor lists and provenance."""
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_MOTION_SENSORS: ["binary_sensor.acme_pir", "binary_sensor.keep_pir"],
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_MOTION_SENSORS: ["binary_sensor.acme_pir", "binary_sensor.keep_pir"],
+            CONF_POWER_SENSORS: ["sensor.acme_power"],
+        },
+    }
+
+    updates = _strip_excluded_sensors_from_draft(
+        draft,
+        {"binary_sensor.acme_pir", "sensor.acme_power"},
+    )
+
+    assert updates == {
+        CONF_MOTION_SENSORS: ["binary_sensor.keep_pir"],
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_MOTION_SENSORS: ["binary_sensor.keep_pir"],
+        },
+    }
+
+
 async def test_sensors_step_separates_readonly_discovery_from_explicit_selection(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
@@ -4278,6 +4366,53 @@ async def test_area_basics_nests_area_exclusions_in_suggested_values(
     assert CONF_EXCLUDED_MODELS not in suggested
     assert CONF_EXCLUDED_INTEGRATIONS not in suggested
     assert CONF_EXCLUDED_SENSORS not in suggested
+
+
+async def test_area_basics_strips_newly_excluded_device_entities(
+    hass: HomeAssistant,
+) -> None:
+    """Saving manufacturer/model exclusions on basics strips matching draft entities."""
+    area_reg = ar.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+    flow._area_being_edited = office.id
+    flow._area_config_draft = {
+        CONF_AREA_ID: office.id,
+        CONF_PURPOSE: "work",
+        CONF_MOTION_SENSORS: [
+            "binary_sensor.acme_pir",
+            "binary_sensor.good_pir",
+        ],
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_MOTION_SENSORS: [
+                "binary_sensor.acme_pir",
+                "binary_sensor.good_pir",
+            ]
+        },
+    }
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.resolve_excluded_device_entity_ids",
+        return_value={"binary_sensor.acme_pir"},
+    ):
+        result = await flow.async_step_area_basics(
+            {
+                CONF_PURPOSE: "work",
+                SECTION_AREA_EXCLUSIONS: {
+                    CONF_EXCLUDED_MANUFACTURERS: ["Acme"],
+                },
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "area_motion"
+    assert flow._area_config_draft[CONF_MOTION_SENSORS] == ["binary_sensor.good_pir"]
+    assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_MOTION_SENSORS: ["binary_sensor.good_pir"]
+    }
 
 
 async def test_options_flow_global_settings_placeholders_are_localized(

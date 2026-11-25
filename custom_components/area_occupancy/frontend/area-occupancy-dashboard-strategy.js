@@ -913,7 +913,9 @@
   }
 
   function findEntity(entities, spec) {
-    return entities.find((entity) => matchesEntitySpec(entity, spec))?.entity_id;
+    return entities.find(
+      (entity) => !entity.disabled_by && matchesEntitySpec(entity, spec),
+    )?.entity_id;
   }
 
   function gridSection(cards, columns = DEFAULTS.VIEW_COLUMNS) {
@@ -1886,7 +1888,7 @@
       type: CARD_TYPE.PROBABILITY,
       title: cardTitle,
       probability_entity: probability,
-      threshold_entity: threshold,
+      ...(threshold ? { threshold_entity: threshold } : {}),
       grid_options: FULL_WIDTH_GRID,
     };
   }
@@ -3001,14 +3003,12 @@
       }
       this._translationsPendingLang = lang;
       try {
-        const resources = await fetchTranslations(
-          hass,
-          TRANSLATION_CATEGORY.COMMON,
-        );
+        const resources =
+          (await fetchTranslations(hass, TRANSLATION_CATEGORY.COMMON)) || {};
         if (getHassLanguage(this._hass) !== lang) return;
-        this._translations = resources || {};
+        this._translations = resources;
         this._translationsLang = lang;
-        this._translationsLoaded = true;
+        this._translationsLoaded = Object.keys(resources).length > 0;
         this._updateView({ force: true });
       } catch {
         // Transient translation WS failures leave previous resources intact.
@@ -3097,11 +3097,21 @@
           significant_changes_only: false,
         });
         if (token !== this._fetchToken) return;
-        this._points = parseHistoryPoints(res?.[entityId]);
-        this._thresholdPoints = thresholdEntity
+        const fetchedAt = Date.now();
+        const freshStartMs = this._resolveCurrentRange(fetchedAt).startMs;
+        const nextPoints = parseHistoryPoints(res?.[entityId]);
+        const nextThresholdPoints = thresholdEntity
           ? parseHistoryPoints(res?.[thresholdEntity])
           : [];
-        const fetchedAt = Date.now();
+        this._points =
+          nextPoints.length > 0
+            ? nextPoints
+            : clipPointsToWindow(this._points, freshStartMs);
+        this._thresholdPoints = !thresholdEntity
+          ? []
+          : nextThresholdPoints.length > 0
+            ? nextThresholdPoints
+            : clipPointsToWindow(this._thresholdPoints, freshStartMs);
         this._syncLivePoints(fetchedAt);
         this._nextFetchAt = fetchedAt + DEFAULTS.HISTORY_REFRESH_MS;
       } catch {

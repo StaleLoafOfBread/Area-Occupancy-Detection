@@ -249,15 +249,12 @@ DISCOVERY_EXCLUSION_RULES: Final[tuple[DiscoveryExclusionRule, ...]] = (
         setting_label="vehicle-detected exclusion",
     ),
 )
-DISCOVERY_EXCLUSION_RULES_BY_KEY: Final[dict[str, DiscoveryExclusionRule]] = {
-    rule.config_key: rule for rule in DISCOVERY_EXCLUSION_RULES
-}
-
 DEFAULT_EXCLUDED_MANUFACTURERS: Final[tuple[str, ...]] = ()
 DEFAULT_EXCLUDED_MODELS: Final[tuple[str, ...]] = ()
 DEFAULT_GLOBAL_EXPAND_GROUPS: Final[bool] = True
 DEFAULT_AREA_EXPAND_GROUPS: Final[GroupExpansionMode] = GroupExpansionMode.FOLLOW_GLOBAL
-DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = CONF_OPTION_PREFIX_AREA
+# Persisted ConfigEntry.unique_id prefix for discovered areas; keep independent of UI menu prefixes.
+DISCOVERY_UNIQUE_ID_PREFIX: Final[str] = "area_"
 DEFAULT_THRESHOLD: Final = 50.0
 DEFAULT_PURPOSE: Final = "social"  # Default area purpose
 DEFAULT_DECAY_ENABLED: Final = True

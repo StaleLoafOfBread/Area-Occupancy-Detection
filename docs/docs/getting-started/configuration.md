@@ -30,7 +30,7 @@ Use **Exclude from automatic discovery** to leave specific entities out. **Exclu
 
 For exclusions that should apply everywhere, open **Configure → Global Settings**. Global entity exclusions remove those entities from occupancy detection in every area; global **Excluded manufacturers** and **Excluded models** do the same for every entity on a matching device. Global integration exclusions apply to automatic discovery in every area, but do not prevent manual selection.
 
-Automatic discovery also includes four built-in sensor noise rules that can each be toggled globally or overridden per area (**Follow Global**, **Exclude**, or **Include**): light-derived power sensors (on by default), occupancy subzones on multi-zone presence devices (on by default), remote/child/calibration locks (on by default), and vehicle-detected sensors (off by default). These exclusions filter automatic discovery without removing manually selected sensors.
+Automatic discovery also includes four built-in sensor noise rules that can each be toggled globally or overridden per area (**Follow Global**, **Exclude**, or **Include**): light-derived power sensors (on by default), occupancy subzones on multi-zone presence devices (on by default), remote/child/calibration locks (on by default), and vehicle-detected sensors (on by default). These exclusions filter automatic discovery without removing manually selected sensors.
 
 Group expansion has its own global default in **Configure → Global Settings**. New areas follow that setting by default. In an area, choose **Follow Global**, **Expand Groups Into Members**, or **Keep Group Entities** to inherit or override the global setting. This applies to both manually selected and automatically discovered groups.
 

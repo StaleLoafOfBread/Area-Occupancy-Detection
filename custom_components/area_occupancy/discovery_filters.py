@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 import re
 from typing import Any, Final, cast
@@ -124,7 +124,11 @@ def normalize_excluded_platforms(
     """Normalize excluded integration platform slugs to a lowercase set."""
     if not excluded_platforms:
         return set()
-    return {p.lower() for p in excluded_platforms if isinstance(p, str) and p}
+    return {
+        cleaned.lower()
+        for p in excluded_platforms
+        if isinstance(p, str) and (cleaned := p.strip())
+    }
 
 
 def entity_domain(entity_id: str) -> str:
@@ -183,6 +187,19 @@ def _compact_token(value: Any) -> str:
     return _COMPACT_TOKEN_RE.sub("", value.casefold())
 
 
+def get_entity_registry(
+    hass: HomeAssistant,
+    *,
+    async_get: Callable[[HomeAssistant], er.EntityRegistry] | None = None,
+) -> er.EntityRegistry | None:
+    """Safely look up the entity registry without failing on bare mocks."""
+    getter = er.async_get if async_get is None else async_get
+    try:
+        return getter(hass)
+    except (AttributeError, KeyError, RuntimeError, TypeError):
+        return None
+
+
 def lookup_registry_entry(
     entity_id: str,
     registry: er.EntityRegistry | None = None,
@@ -193,9 +210,8 @@ def lookup_registry_entry(
     if registry is None:
         if hass is None:
             return None
-        try:
-            registry = er.async_get(hass)
-        except (AttributeError, KeyError, RuntimeError, TypeError):
+        registry = get_entity_registry(hass)
+        if registry is None:
             return None
     entities = getattr(registry, _ATTR_ENTITIES, None)
     if isinstance(entities, dict):
@@ -575,6 +591,8 @@ def is_ineligible_entry(
     hass: HomeAssistant,
     entry: er.RegistryEntry,
     excluded_platforms: set[str],
+    *,
+    allow_entity_category: bool = False,
 ) -> bool:
     """Return True if a registry entry should never be auto-discovered."""
     return (
@@ -582,7 +600,7 @@ def is_ineligible_entry(
         or _is_platform_excluded(hass, entry, excluded_platforms)
         or is_weather_entity(entry.entity_id, entry.platform)
         or entry.disabled_by is not None
-        or entry.entity_category is not None
+        or (not allow_entity_category and entry.entity_category is not None)
     )
 
 

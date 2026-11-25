@@ -187,6 +187,7 @@ def test_strategy_uses_frontend_translations_instead_of_hardcoded_defaults() -> 
     source = strategy.read_text(encoding="utf-8")
     assert '"frontend/get_translations"' in source
     assert "I18N_KEY" in source
+    assert "!entity.disabled_by" in source
     assert "DASHBOARD_DESCRIPTION:" not in source
     assert "UNASSIGNED_FLOOR_LABEL:" not in source
     assert "PROBABILITY_CARD_TITLE:" not in source
