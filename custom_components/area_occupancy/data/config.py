@@ -484,6 +484,7 @@ class DecayConfig:
     enabled: bool = DEFAULT_DECAY_ENABLED
     half_life: int = DEFAULT_DECAY_HALF_LIFE
     sleep_half_life: int = DEFAULT_SLEEP_DECAY_HALF_LIFE
+    uses_purpose_default: bool = True
 
 
 @dataclass
@@ -697,9 +698,10 @@ class AreaConfig:
         )
 
         # Resolve half-life: if 0 or not set, use purpose-based value
+        raw_half_life = int(data.get(CONF_DECAY_HALF_LIFE, DEFAULT_DECAY_HALF_LIFE))
         half_life_value = int(
             resolve_decay_half_life(
-                int(data.get(CONF_DECAY_HALF_LIFE, DEFAULT_DECAY_HALF_LIFE)),
+                raw_half_life,
                 self.purpose,
                 self.coordinator,
             )
@@ -715,6 +717,7 @@ class AreaConfig:
             half_life=half_life_value,
             sleep_half_life=sleep_half_life_value,
             enabled=bool(data.get(CONF_DECAY_ENABLED, DEFAULT_DECAY_ENABLED)),
+            uses_purpose_default=(raw_half_life == 0),
         )
 
         self.wasp_in_box = WaspInBox(

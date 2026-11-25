@@ -24,7 +24,7 @@ Select the Home Assistant area and its primary [Purpose](../features/purpose.md)
 
 **Automatically discover sensors** is enabled by default for new areas. It adds supported sensors using their Home Assistant device class and area assignment. An entity's area takes precedence over its device's area. Discovery refreshes at startup, when configuration is saved, and after entity or device registry changes.
 
-Existing areas keep their manual selections and discovery stays off until you enable it in **Area Basics**. Turning discovery off removes automatic additions without changing your saved manual selections or learned history.
+Existing areas keep their saved manual selections and gain automatic discovery unless you disable it in **Area Basics**. Turning discovery off removes automatic additions without changing your saved manual selections or learned history.
 
 Use **Exclude from automatic discovery** to leave specific entities out. **Excluded manufacturers** and **Excluded models** let you exclude matching devices from this area (including entities already selected manually). Manual selections can supplement discovery, including devices assigned to another area.
 

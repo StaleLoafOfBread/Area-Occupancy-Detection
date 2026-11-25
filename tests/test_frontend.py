@@ -1,4 +1,4 @@
-"""Tests for the bundled time-priors Lovelace card registration (issue #559)."""
+"""Tests for the bundled time-priors Lovelace card and dashboard strategy."""
 
 from __future__ import annotations
 
@@ -97,6 +97,41 @@ async def test_missing_card_file_warns_but_registers_strategy(
     assert "Time-priors card not found" in caplog.text
 
 
+async def test_missing_strategy_or_all_missing_assets(
+    hass: HomeAssistant, frontend_mocks, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Missing strategy logs warning; missing all assets leaves registration unset."""
+    register, add_js = frontend_mocks
+
+    with (
+        patch.object(aod_init, "DASHBOARD_STRATEGY_FILENAME", "does-not-exist.js"),
+        caplog.at_level(logging.WARNING, logger=aod_init.__name__),
+    ):
+        assert await async_setup(hass, {}) is True
+
+    register.assert_awaited_once()
+    (configs,) = register.await_args.args
+    assert [config.url_path for config in configs] == [CARD_URL]
+    add_js.assert_called_once_with(hass, f"{CARD_URL}?v=2026.9.99")
+    assert "Dashboard strategy not found" in caplog.text
+
+    hass.data.pop(FRONTEND_REGISTERED_KEY, None)
+    register.reset_mock()
+    add_js.reset_mock()
+    with (
+        patch.object(aod_init, "TIME_PRIORS_CARD_FILENAME", "does-not-exist-card.js"),
+        patch.object(
+            aod_init, "DASHBOARD_STRATEGY_FILENAME", "does-not-exist-strategy.js"
+        ),
+        caplog.at_level(logging.WARNING, logger=aod_init.__name__),
+    ):
+        assert await async_setup(hass, {}) is True
+
+    register.assert_not_awaited()
+    add_js.assert_not_called()
+    assert FRONTEND_REGISTERED_KEY not in hass.data
+
+
 def test_card_ships_inside_integration() -> None:
     """The card lives in the integration package so the release zip carries it."""
     card = COMPONENT_DIR / FRONTEND_DIR / TIME_PRIORS_CARD_FILENAME
@@ -188,6 +223,10 @@ def test_strategy_uses_frontend_translations_instead_of_hardcoded_defaults() -> 
     assert '"frontend/get_translations"' in source
     assert "I18N_KEY" in source
     assert "!entity.disabled_by" in source
+    assert "TRANSLATION_ERROR_BACKOFF_MS" in source
+    assert "TRANSLATION_MAX_RETRIES" in source
+    assert "!areasById?.has(id)" in source
+    assert "this._fetchToken += 1;" in source
     assert "DASHBOARD_DESCRIPTION:" not in source
     assert "UNASSIGNED_FLOOR_LABEL:" not in source
     assert "PROBABILITY_CARD_TITLE:" not in source

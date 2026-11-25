@@ -59,6 +59,10 @@ from custom_components.area_occupancy.discovery_filters import (
     normalize_excluded_platforms,
     split_platform_source,
 )
+from custom_components.area_occupancy.discovery_groups import (
+    group_contains_own_entity,
+    is_own_entity,
+)
 from homeassistant.config_entries import SOURCE_IGNORE, SOURCE_INTEGRATION_DISCOVERY
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -1089,7 +1093,8 @@ def test_registry_changes_refresh_and_cleanup() -> None:
 
         entity_listener(SimpleNamespace(data={"action": "remove"}))
         assert later.call_count == 5
-        entry.async_on_unload.call_args_list[0].args[0]()
+        for call in entry.async_on_unload.call_args_list:
+            call.args[0]()
         assert later.return_value.call_count == 2
 
 
@@ -2920,3 +2925,109 @@ def test_merge_discovered_additions_deduplicates_across_keys_and_moves_provenanc
         CONF_TEMPERATURE_SENSORS: ["sensor.shared_env"],
         CONF_HUMIDITY_SENSORS: ["sensor.reclassified_env"],
     }
+
+
+def test_manual_legacy_group_with_mismatched_member_is_preserved() -> None:
+    """Manually configured root legacy group.* entities keep mismatched members intact."""
+    legacy_group = _reg_entry("group.garage_presence")
+    pir = _reg_entry("binary_sensor.garage_pir", device_class="motion")
+    obstruction = _reg_entry("binary_sensor.garage_obstruction", device_class="problem")
+    hass, registry, devices = _make_group_hass(
+        entities=[legacy_group, pir, obstruction],
+        states={
+            legacy_group.entity_id: {
+                ATTR_ENTITY_ID: [pir.entity_id, obstruction.entity_id],
+            }
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [legacy_group.entity_id],
+            },
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [legacy_group.entity_id]
+
+
+def test_is_own_entity_and_group_contains_own_entity_resolve_without_registry() -> None:
+    """Own-entity helpers resolve registry entries via hass when registry is None."""
+    own_entry = _reg_entry(
+        "binary_sensor.office_occupancy_status", device_class="occupancy"
+    )
+    own_entry.platform = "area_occupancy"
+    other_entry = _reg_entry("binary_sensor.other_pir", device_class="motion")
+    wrapper_group = _reg_entry(
+        "binary_sensor.own_wrapper_group", device_class="occupancy"
+    )
+    hass, registry, _ = _make_group_hass(
+        entities=[own_entry, other_entry, wrapper_group],
+        states={
+            wrapper_group.entity_id: {
+                ATTR_ENTITY_ID: [own_entry.entity_id, other_entry.entity_id],
+            }
+        },
+    )
+
+    with patch(
+        "custom_components.area_occupancy.discovery_filters.er.async_get",
+        return_value=registry,
+    ):
+        assert is_own_entity(hass, own_entry.entity_id) is True
+        assert is_own_entity(hass, other_entry.entity_id) is False
+        assert group_contains_own_entity(hass, wrapper_group.entity_id) is True
+        assert group_contains_own_entity(hass, other_entry.entity_id) is False
+
+
+def test_reclassified_group_wrapping_untyped_group_with_diagnostic_member() -> None:
+    """Intermediate untyped groups preserve diagnostic leaves for outer mismatch checks."""
+    outer_occ = _reg_entry(
+        "binary_sensor.outer_occ", area_id="garage", device_class="occupancy"
+    )
+    untyped_inner = _reg_entry("group.untyped_beams")
+    diag_beam = _reg_entry("binary_sensor.diag_beam", device_class="problem")
+    diag_beam.entity_category = EntityCategory.DIAGNOSTIC
+    hass, registry, devices = _make_group_hass(
+        entities=[outer_occ, untyped_inner, diag_beam],
+        states={
+            outer_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: [untyped_inner.entity_id],
+            },
+            untyped_inner.entity_id: {
+                ATTR_ENTITY_ID: [diag_beam.entity_id],
+            },
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+    assert diag_beam.entity_id not in resolved[CONF_MOTION_SENSORS]

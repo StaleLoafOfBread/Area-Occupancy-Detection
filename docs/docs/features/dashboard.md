@@ -16,12 +16,12 @@ strategy:
   type: custom:area-occupancy
 ```
 
-The dashboard is generated when it is created. If you add or remove areas
-later, recreate the dashboard from the strategy to refresh its views.
+The dashboard regenerates automatically when loaded or reloaded if you add or remove
+areas. Recreating it is only needed if you previously clicked **Take control**.
 
 ## Views
 
-- **Status** is grouped by Home Assistant floor. Connected areas appear near each other using configured adjacency. Each timer card shows activity, probability, threshold, and evidence counts; tapping it opens that area as a subview.
+- **Status** is grouped by Home Assistant floor. Connected areas appear near each other using configured adjacency. Each area card shows activity, probability, threshold, and evidence counts; tapping it opens that area as a subview.
 - **Forecast** fills the available view width. Its comfort threshold is the average of enabled area thresholds (50% when no threshold values are available).
 - **Info** appears only when issues are detected (such as disabled diagnostic entities, disabled or unavailable core entities, sensor health anomalies, or missing areas) and links to the affected devices so you can fix them.
 - Each configured area has a subview with occupancy controls, a **Sensors & Decay** list, recent history, and a weekly forecast.

@@ -3582,6 +3582,37 @@ def test_strip_excluded_sensors_from_draft_updates_lists_and_provenance() -> Non
     }
 
 
+def test_sync_preserves_provenance_for_omitted_sensor_keys() -> None:
+    """Auto-added provenance survives partial submissions omitting optional keys."""
+    hass = Mock()
+    draft = {
+        CONF_AREA_ID: "office",
+        CONF_AUTO_DISCOVER_SENSORS: True,
+        CONF_MOTION_SENSORS: ["binary_sensor.auto_m"],
+        CONF_POWER_SENSORS: ["sensor.auto_p"],
+        CONF_AUTO_ADDED_SENSORS: {
+            CONF_MOTION_SENSORS: ["binary_sensor.auto_m"],
+            CONF_POWER_SENSORS: ["sensor.auto_p"],
+        },
+    }
+
+    with patch(
+        "custom_components.area_occupancy.config_flow.discover_area_sensors",
+        return_value={},
+    ):
+        synced = _sync_discovered_and_excluded(
+            hass,
+            draft,
+            {},
+            (CONF_MOTION_SENSORS, CONF_POWER_SENSORS),
+        )
+
+    assert synced[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_MOTION_SENSORS: ["binary_sensor.auto_m"],
+        CONF_POWER_SENSORS: ["sensor.auto_p"],
+    }
+
+
 async def test_sensors_step_separates_readonly_discovery_from_explicit_selection(
     config_flow_flow: AreaOccupancyConfigFlow,
 ) -> None:
@@ -4413,6 +4444,55 @@ async def test_area_basics_strips_newly_excluded_device_entities(
     assert flow._area_config_draft[CONF_AUTO_ADDED_SENSORS] == {
         CONF_MOTION_SENSORS: ["binary_sensor.good_pir"]
     }
+
+
+async def test_area_motion_and_sensors_steps_preserve_manual_group_ids_in_suggested(
+    hass: HomeAssistant,
+) -> None:
+    """Opening motion/sensor steps preserves unexpanded manual group entity IDs."""
+    area_reg = ar.async_get(hass)
+    office = area_reg.async_create("Office")
+
+    flow = AreaOccupancyConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+    flow._area_being_edited = office.id
+    flow._area_config_draft = {
+        CONF_AREA_ID: office.id,
+        CONF_PURPOSE: "work",
+        CONF_AUTO_DISCOVER_SENSORS: False,
+        CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+        CONF_MOTION_SENSORS: ["binary_sensor.manual_motion_group"],
+        CONF_DOOR_SENSORS: ["binary_sensor.manual_door_group"],
+    }
+
+    expanded_resolved = {
+        **flow._area_config_draft,
+        CONF_MOTION_SENSORS: ["binary_sensor.pir_1", "binary_sensor.pir_2"],
+        CONF_DOOR_SENSORS: ["binary_sensor.door_1"],
+    }
+
+    with (
+        patch.object(flow, "_resolve_area_sensors", return_value=expanded_resolved),
+        patch.object(
+            flow,
+            "_schema_with_explicit_suggested",
+            wraps=flow._schema_with_explicit_suggested,
+        ) as wrap_suggested,
+    ):
+        motion_result = await flow.async_step_area_motion()
+        assert motion_result["type"] == FlowResultType.FORM
+        motion_suggested = wrap_suggested.call_args.args[2]
+        assert motion_suggested[CONF_MOTION_SENSORS] == [
+            "binary_sensor.manual_motion_group"
+        ]
+
+        sensors_result = await flow.async_step_area_sensors()
+        assert sensors_result["type"] == FlowResultType.FORM
+        sensors_suggested = wrap_suggested.call_args.args[2]
+        assert sensors_suggested[CONF_DOOR_SENSORS] == [
+            "binary_sensor.manual_door_group"
+        ]
 
 
 async def test_options_flow_global_settings_placeholders_are_localized(

@@ -2327,7 +2327,7 @@ def _sync_discovered_and_excluded(
     updated_auto = {
         key: entity_ids
         for key, entity_ids in tracked_auto.items()
-        if key not in sensor_keys
+        if key not in sensor_keys or key not in updated
     }
     excluded = list(dict.fromkeys(draft.get(CONF_EXCLUDED_SENSORS) or []))
     for key in sensor_keys:
@@ -3506,7 +3506,9 @@ class BaseOccupancyFlow(_FlowBase):
         base_schema = vol.Schema(schema_dict)
         draft_suggested = (
             _draft_to_suggested(
-                _explicit_sensor_config(resolved_draft, (CONF_MOTION_SENSORS,)),
+                _explicit_sensor_config(
+                    self._area_config_draft, (CONF_MOTION_SENSORS,)
+                ),
                 motion_keys,
             )
             if user_input is None
@@ -3581,7 +3583,7 @@ class BaseOccupancyFlow(_FlowBase):
         explicit_suggested: dict[str, Any] = {}
         if user_input is None and self._area_config_draft:
             explicit_config = _explicit_sensor_config(
-                resolved_draft, active_sensor_keys
+                self._area_config_draft, active_sensor_keys
             )
             nested = _nest_config_for_sections(explicit_config)
             for group in groups:

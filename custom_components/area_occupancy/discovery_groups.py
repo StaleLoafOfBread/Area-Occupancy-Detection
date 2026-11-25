@@ -66,8 +66,7 @@ def is_own_entity(
     registry: er.EntityRegistry | None = None,
 ) -> bool:
     """Return True if ``entity_id`` belongs to this integration."""
-    del hass
-    entry = lookup_registry_entry(entity_id, registry)
+    entry = lookup_registry_entry(entity_id, registry, hass=hass)
     return entry is not None and is_own_entry(entry)
 
 
@@ -248,6 +247,8 @@ def _expand_discovery_node(
             )
         ]
 
+    if visited:
+        return resolved_children
     return [
         child
         for child in resolved_children
@@ -354,24 +355,24 @@ def _expand_manual_node(
         )
     )
     check_key = expected_key if not visited else (group_key or expected_key)
-    if (
-        check_domain is not None
-        and (visited or deduped_children or group_dc is not None)
-        and any(
-            not member_matches_group_classification(
-                hass,
-                member_id,
-                member_entry=lookup_registry_entry(member_id, registry),
-                expected_domain=check_domain,
-                expected_key=check_key,
-                map_sensor_key=map_sensor_key,
-            )
-            for member_id in deduped_children
+    if check_domain is not None and any(
+        not member_matches_group_classification(
+            hass,
+            member_id,
+            member_entry=lookup_registry_entry(member_id, registry),
+            expected_domain=check_domain,
+            expected_key=check_key,
+            map_sensor_key=map_sensor_key,
         )
+        for member_id in deduped_children
     ):
         if group_contains_own_entity(hass, entity_id, registry):
             return []
-        if required_domain is not None and group_domain != required_domain:
+        if (
+            required_domain is not None
+            and group_domain != required_domain
+            and (visited or group_domain != GROUP_DOMAIN)
+        ):
             return []
         return [entity_id]
 

@@ -33,6 +33,7 @@ class Decay:
         sleep_start: str | None = None,
         sleep_end: str | None = None,
         sleep_override_provider: Callable[[], bool | None] | None = None,
+        uses_purpose_default: bool | None = None,
     ) -> None:
         """Initialize the decay model.
 
@@ -53,6 +54,9 @@ class Decay:
                 constructed. A non-None result takes priority over the
                 sleep_start/sleep_end clock window; None falls back to the
                 clock window.
+            uses_purpose_default: Optional explicit flag indicating whether
+                ``half_life`` came from the area's purpose default rather than
+                a per-area override.
         """
         # Ensure decay_start is timezone-aware
         if decay_start is not None:
@@ -61,6 +65,7 @@ class Decay:
             self.decay_start = dt_util.utcnow()
 
         self._base_half_life = half_life
+        self._uses_purpose_default = uses_purpose_default
         self.is_decaying = is_decaying
         self._purpose = Purpose(purpose) if purpose is not None else None
         self.sleep_start = sleep_start
@@ -129,7 +134,12 @@ class Decay:
         # A user-configured half-life overrides the sleep/awake switching:
         # the awake_half_life alternative only applies when the half-life
         # is the purpose's own default (#481).
-        if self._base_half_life != self._purpose.half_life:
+        is_purpose_default = (
+            self._uses_purpose_default
+            if self._uses_purpose_default is not None
+            else self._base_half_life == self._purpose.half_life
+        )
+        if not is_purpose_default:
             return self._base_half_life
 
         # The area's own Sleep Presence sensor, when it reports a definite

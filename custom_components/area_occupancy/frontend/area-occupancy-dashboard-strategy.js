@@ -191,23 +191,17 @@
     SENSOR_HEALTH_ISSUE_FALLBACK: "dashboard_sensor_health_issue_fallback",
   });
 
-  const DEVICE_CLASS = Object.freeze({
-    OCCUPANCY: "occupancy",
-    ENUM: "enum",
-  });
-
   const ENTITY_CATEGORY = Object.freeze({
     DIAGNOSTIC: "diagnostic",
   });
 
   const UNAVAILABLE_STATES = Object.freeze(["unavailable", "unknown"]);
 
-  // Immutable registry matchers (domain, original_device_class, translation_key, unique_id)
+  // Immutable registry matchers (domain, translation_key, unique_id)
   // so user entity_id renames never break entity discovery.
   const ENTITY_SPEC = Object.freeze({
     STATUS: Object.freeze({
       domain: ENTITY_DOMAIN.BINARY_SENSOR,
-      deviceClass: DEVICE_CLASS.OCCUPANCY,
       translationKey: "occupancy_status",
       uniqueIdSuffix: "occupancy_status",
     }),
@@ -223,7 +217,6 @@
     }),
     ACTIVITY: Object.freeze({
       domain: ENTITY_DOMAIN.SENSOR,
-      deviceClass: DEVICE_CLASS.ENUM,
       translationKey: "detected_activity",
       uniqueIdSuffix: "detected_activity",
     }),
@@ -392,6 +385,8 @@
     VIEW_COLUMNS: 3,
     HISTORY_REFRESH_MS: TIME_MS.MINUTE,
     HISTORY_ERROR_BACKOFF_MS: 15_000,
+    TRANSLATION_ERROR_BACKOFF_MS: 15_000,
+    TRANSLATION_MAX_RETRIES: 3,
     PENDING_THRESHOLD_MS: 2_500,
     DRAG_DEADZONE_PX: 4,
     COUNTDOWN_TICK_MS: TIME_MS.SECOND,
@@ -711,11 +706,11 @@
     return hass?.locale?.language || hass?.language || DEFAULTS.LANGUAGE;
   }
 
-  function fetchTranslations(hass, category) {
+  function fetchTranslations(hass, category, languageOverride) {
     if (!hass?.callWS) {
       return Promise.resolve({});
     }
-    const language = getHassLanguage(hass);
+    const language = languageOverride || getHassLanguage(hass);
     const cacheKey = `${language}:${category}`;
     if (TRANSLATION_CACHE.has(cacheKey)) {
       return TRANSLATION_CACHE.get(cacheKey);
@@ -742,6 +737,24 @@
       });
     TRANSLATION_CACHE.set(cacheKey, promise);
     return promise;
+  }
+
+  async function fetchTranslationsWithFallback(hass, category) {
+    const loadSafe = (languageOverride) =>
+      fetchTranslations(hass, category, languageOverride).catch(() => ({}));
+    const primary = await loadSafe();
+    if (Object.keys(primary).length > 0) return primary;
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, DEFAULTS.LOCALIZE_RETRY_DELAY_MS),
+    );
+    const retried = await loadSafe();
+    if (Object.keys(retried).length > 0) return retried;
+
+    if (getHassLanguage(hass) !== DEFAULTS.LANGUAGE) {
+      return loadSafe(DEFAULTS.LANGUAGE);
+    }
+    return {};
   }
 
   function translateKey(hass, resources, key, placeholders) {
@@ -860,10 +873,11 @@
     return domainIdentifiers(device).length > 0;
   }
 
-  function isAggregateDevice(device) {
+  function isAggregateDevice(device, areasById) {
     return domainIdentifiers(device).some(
       (id) =>
-        id === DEVICE_ID.ALL_AREAS || id.startsWith(DEVICE_ID.FLOOR_PREFIX),
+        id === DEVICE_ID.ALL_AREAS ||
+        (id.startsWith(DEVICE_ID.FLOOR_PREFIX) && !areasById?.has(id)),
     );
   }
 
@@ -898,10 +912,6 @@
   function matchesEntitySpec(entity, spec) {
     if (spec.domain && entityDomain(entity.entity_id) !== spec.domain) {
       return false;
-    }
-    if (spec.deviceClass) {
-      const deviceClass = entity.original_device_class ?? entity.device_class;
-      if (deviceClass && deviceClass !== spec.deviceClass) return false;
     }
     if (spec.translationKey && entity.translation_key) {
       return entity.translation_key === spec.translationKey;
@@ -2044,15 +2054,18 @@
   }
 
   function indexRegistries({ areas, floors, devices, registry }) {
+    const areasById = new Map(areas.map((area) => [area.area_id, area]));
     const integrationDevices = devices.filter(isDomainDevice);
     return {
-      areasById: new Map(areas.map((area) => [area.area_id, area])),
+      areasById,
       areasByName: new Map(areas.map((area) => [area.name, area])),
       floorsById: new Map(floors.map((floor) => [floor.floor_id, floor])),
       entitiesByDevice: indexEntitiesByDevice(registry),
-      aggregateDevices: integrationDevices.filter(isAggregateDevice),
+      aggregateDevices: integrationDevices.filter((device) =>
+        isAggregateDevice(device, areasById),
+      ),
       areaDevices: integrationDevices.filter(
-        (device) => !isAggregateDevice(device),
+        (device) => !isAggregateDevice(device, areasById),
       ),
     };
   }
@@ -2522,8 +2535,8 @@
   async function loadDashboardContext(hass) {
     const [rawRegistries, commonResources, entityResources] = await Promise.all([
       fetchRawRegistries(hass),
-      fetchTranslations(hass, TRANSLATION_CATEGORY.COMMON).catch(() => ({})),
-      fetchTranslations(hass, TRANSLATION_CATEGORY.ENTITY).catch(() => ({})),
+      fetchTranslationsWithFallback(hass, TRANSLATION_CATEGORY.COMMON),
+      fetchTranslationsWithFallback(hass, TRANSLATION_CATEGORY.ENTITY),
     ]);
     const t = createTranslator(hass, commonResources);
     const {
@@ -2884,6 +2897,9 @@
       this._translationsLang = "";
       this._translationsPendingLang = "";
       this._translationsLoaded = false;
+      this._translationsRetryLang = "";
+      this._translationsRetries = 0;
+      this._translationsNextRetryAt = 0;
     }
 
     getCardSize() {
@@ -2897,6 +2913,8 @@
     disconnectedCallback() {
       this._stopResizeObserver();
       this._cancelDrag();
+      this._fetchToken += 1;
+      this._fetching = false;
     }
 
     _startResizeObserver() {
@@ -3001,17 +3019,41 @@
       ) {
         return;
       }
+      if (this._translationsRetryLang !== lang) {
+        this._translationsRetryLang = lang;
+        this._translationsRetries = 0;
+        this._translationsNextRetryAt = 0;
+      }
+      if (
+        this._translationsRetries >= DEFAULTS.TRANSLATION_MAX_RETRIES ||
+        Date.now() < this._translationsNextRetryAt
+      ) {
+        return;
+      }
       this._translationsPendingLang = lang;
       try {
         const resources =
           (await fetchTranslations(hass, TRANSLATION_CATEGORY.COMMON)) || {};
         if (getHassLanguage(this._hass) !== lang) return;
-        this._translations = resources;
-        this._translationsLang = lang;
-        this._translationsLoaded = Object.keys(resources).length > 0;
-        this._updateView({ force: true });
+        if (Object.keys(resources).length > 0) {
+          this._translations = resources;
+          this._translationsLang = lang;
+          this._translationsLoaded = true;
+          this._translationsRetries = 0;
+          this._translationsNextRetryAt = 0;
+          this._updateView({ force: true });
+        } else {
+          this._translationsRetries += 1;
+          this._translationsNextRetryAt =
+            Date.now() + DEFAULTS.TRANSLATION_ERROR_BACKOFF_MS;
+        }
       } catch {
-        // Transient translation WS failures leave previous resources intact.
+        // Back off and cap retries so WS failures don't spin on state updates.
+        if (this._translationsRetryLang === lang) {
+          this._translationsRetries += 1;
+          this._translationsNextRetryAt =
+            Date.now() + DEFAULTS.TRANSLATION_ERROR_BACKOFF_MS;
+        }
       } finally {
         if (this._translationsPendingLang === lang) {
           this._translationsPendingLang = "";
@@ -3341,7 +3383,6 @@
       if (finalValue !== null) {
         this._pendingThreshold = finalValue;
         this._pendingUntil = Date.now() + DEFAULTS.PENDING_THRESHOLD_MS;
-        this._updateThresholdVisual(finalValue);
         this._commitThreshold(finalValue);
       }
       this._updateView({ force: true });

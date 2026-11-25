@@ -557,6 +557,51 @@ class TestDecayHalfLife:
             current_time, sleep_start, sleep_end, custom_half_life, custom_half_life
         )
 
+    def test_sleeping_uses_purpose_default_flag_respects_global_and_explicit_overrides(
+        self,
+    ) -> None:
+        """Global sleeping defaults keep switching while explicit overrides do not."""
+        # Global purpose-default override (3600s) still switches to awake_half_life.
+        global_default_decay = Decay(
+            half_life=3600.0,
+            purpose=AreaPurpose.SLEEPING.value,
+            sleep_override_provider=lambda: False,
+            uses_purpose_default=True,
+        )
+        assert global_default_decay.half_life == self.RELAXING_HALF_LIFE
+
+        global_asleep_decay = Decay(
+            half_life=3600.0,
+            purpose=AreaPurpose.SLEEPING.value,
+            sleep_override_provider=lambda: True,
+            uses_purpose_default=True,
+        )
+        assert global_asleep_decay.half_life == 3600.0
+
+        # Clock-window switching also still applies when uses_purpose_default=True.
+        clock_decay = Decay(
+            half_life=3600.0,
+            purpose=AreaPurpose.SLEEPING.value,
+            sleep_start="23:00:00",
+            sleep_end="07:00:00",
+            uses_purpose_default=True,
+        )
+        daytime = self.create_time_datetime("12:00:00").replace(tzinfo=dt_util.UTC)
+        with (
+            patch("homeassistant.util.dt.utcnow", return_value=daytime),
+            patch("homeassistant.util.dt.as_local", return_value=daytime),
+        ):
+            assert clock_decay.half_life == self.RELAXING_HALF_LIFE
+
+        # Explicit per-area override matching the built-in 1800s disables switching.
+        explicit_decay = Decay(
+            half_life=self.SLEEPING_HALF_LIFE,
+            purpose=AreaPurpose.SLEEPING.value,
+            sleep_override_provider=lambda: False,
+            uses_purpose_default=False,
+        )
+        assert explicit_decay.half_life == self.SLEEPING_HALF_LIFE
+
     def test_sleeping_error_handling_invalid_format(self) -> None:
         """Test SLEEPING purpose with invalid sleep time format falls back to base_half_life."""
         decay = Decay(
