@@ -412,14 +412,14 @@
 
   // Responsive column counts for the fixed-column grid inside auto-entities.
   const SENSOR_GRID_BREAKPOINTS = Object.freeze([
-    Object.freeze({ columns: 1, mediaQuery: "(max-width: 600px)" }),
+    Object.freeze({ columns: 1, mediaQuery: "(width <= 600px)" }),
     Object.freeze({
       columns: 2,
-      mediaQuery: "(min-width: 601px) and (max-width: 1023px)",
+      mediaQuery: "(width > 600px) and (width < 1024px)",
     }),
     Object.freeze({
       columns: DEFAULTS.VIEW_COLUMNS,
-      mediaQuery: "(min-width: 1024px)",
+      mediaQuery: "(width >= 1024px)",
     }),
   ]);
 
@@ -1467,7 +1467,8 @@
   ) {
     const aggregatePrelude = `
       ${NUM_HELPER_JS}
-      const occupied = ${statusId} ? states[${statusId}]?.state === ${JSON.stringify(ENTITY_STATE.ON)} : false;
+      const memberIds = ${memberStatusIds};
+      const occupied = ${statusId} ? states[${statusId}]?.state === ${JSON.stringify(ENTITY_STATE.ON)} : memberIds.some((id) => states[id]?.state === ${JSON.stringify(ENTITY_STATE.ON)});
       const modeStyle = (${templateCtx.aggregateModeStylesJson})[occupied ? "${AREA_MODE.LIVE}" : "${AREA_MODE.UNOCCUPIED}"];
       const stateColor = modeStyle.color;
       const label = occupied ? ${templateCtx.occupiedLabel} : ${templateCtx.unoccupiedLabel};
@@ -2106,13 +2107,16 @@
   }
 
   function compareFloorGroups(left, right, floorsById) {
-    const leftLevel = floorsById.get(left.floorId)?.level;
-    const rightLevel = floorsById.get(right.floorId)?.level;
-    if (leftLevel != null && rightLevel != null && leftLevel !== rightLevel) {
-      return leftLevel - rightLevel;
-    }
     if (left.floorId && !right.floorId) return -1;
     if (!left.floorId && right.floorId) return 1;
+    const leftLevel = floorsById.get(left.floorId)?.level;
+    const rightLevel = floorsById.get(right.floorId)?.level;
+    const leftHasLevel = leftLevel != null;
+    const rightHasLevel = rightLevel != null;
+    if (leftHasLevel !== rightHasLevel) return leftHasLevel ? -1 : 1;
+    if (leftHasLevel && rightHasLevel && leftLevel !== rightLevel) {
+      return leftLevel - rightLevel;
+    }
     return left.label.localeCompare(right.label);
   }
 
@@ -2474,10 +2478,10 @@
         return `- ${link}: ${t(countKey, { count: item.count })}`;
       }
       const details = item.issues
-        .map(
-          (issue) =>
-            `\`${issue.entity_id}\` (${title(issue.type || fallbackType)})`,
-        )
+        .map((issue) => {
+          const label = title(issue.type || fallbackType);
+          return issue.entity_id ? `\`${issue.entity_id}\` (${label})` : label;
+        })
         .join(", ");
       return `- ${link}: ${details}`;
     });
@@ -3610,7 +3614,7 @@
       }
       return;
     }
-    fetchTranslations(hass, TRANSLATION_CATEGORY.COMMON)
+    fetchTranslationsWithFallback(hass, TRANSLATION_CATEGORY.COMMON)
       .then((resources) => {
         const t = createTranslator(hass, resources);
         const localizedName = t(I18N_KEY.DASHBOARD_TITLE);

@@ -26,11 +26,11 @@ Select the Home Assistant area and its primary [Purpose](../features/purpose.md)
 
 Existing areas keep their saved manual selections and gain automatic discovery unless you disable it in **Area Basics**. Turning discovery off removes automatic additions without changing your saved manual selections or learned history.
 
-Use **Exclude from automatic discovery** to leave specific entities out. **Excluded manufacturers** and **Excluded models** let you exclude matching devices from this area (including entities already selected manually). Manual selections can supplement discovery, including devices assigned to another area.
+Use **Entities to exclude in this area** to leave specific entities out of discovery and saved selections. **Manufacturers to exclude in this area** and **Models to exclude in this area** let you exclude matching devices from this area (including entities already selected manually). Manual selections can supplement discovery, including devices assigned to another area.
 
-For exclusions that should apply everywhere, open **Configure → Global Settings**. Global entity exclusions remove those entities from occupancy detection in every area; global **Excluded manufacturers** and **Excluded models** do the same for every entity on a matching device. Global integration exclusions apply to automatic discovery in every area, but do not prevent manual selection.
+For exclusions that should apply everywhere, open **Configure → Global Settings**. Global entity exclusions remove those entities from occupancy detection in every area; global **Devices excluded by manufacturer** and **Devices excluded by model** do the same for every entity on a matching device. Global integration exclusions apply to automatic discovery in every area, but do not prevent manual selection.
 
-Automatic discovery also includes four built-in sensor noise rules that can each be toggled globally or overridden per area (**Follow Global**, **Exclude**, or **Include**): light-derived power sensors (on by default), occupancy subzones on multi-zone presence devices (on by default), remote/child/calibration locks (on by default), and vehicle-detected sensors (on by default). These exclusions filter automatic discovery without removing manually selected sensors.
+Automatic discovery also includes four built-in sensor noise rules that can each be toggled globally or overridden per area (**Follow Global**, **Exclude**, or **Include**): light-derived power sensors (on by default), occupancy subzones on multi-zone presence devices (on by default), remote locks (on by default), and vehicle-detected sensors (on by default). These exclusions filter automatic discovery without removing manually selected sensors.
 
 Group expansion has its own global default in **Configure → Global Settings**. New areas follow that setting by default. In an area, choose **Follow Global**, **Expand Groups Into Members**, or **Keep Group Entities** to inherit or override the global setting. This applies to both manually selected and automatically discovered groups.
 
@@ -81,7 +81,7 @@ Configure motion and presence sensors for the area. At least one motion sensor i
 
 ![One page per kind of sensor](../images/config_area_sensors_menu.png)
 
-Configure optional sensors in the **Explicitly selected** section. The form separates these editable selectors from the **Auto-added (read-only)** list. Automatic sensors cannot be changed in the form; use the discovery settings or exclusions in Area Basics to remove them. Choose only [sensors](../features/sensors.md) that are relevant to the area:
+Configure optional sensors in the **Sensors** section. Auto-added sensors appear alongside each group as read-only fields (**Auto-added — ...**) and cannot be changed directly; use the discovery settings or exclusions in **Area Basics** to remove them. Choose only [sensors](../features/sensors.md) that are relevant to the area:
 
 - **Windows, Doors & Covers**: Door sensors, window sensors, cover entities with active state configuration
 - **Media Players**: Media devices with active state selection
@@ -102,6 +102,7 @@ Configure how occupancy is detected and reported:
 | Occupancy Threshold (%)     | The probability percentage required for the main **Occupancy Status** binary sensor to turn `on`                                            | 50%              |
 | Enable Time Decay           | Toggle whether to enable the [Probability Decay](../features/decay.md) feature                                                              | Enabled          |
 | Decay Half-Life             | How long it takes for probability to reduce by half after activity stops (duration picker)                                                  | Based on purpose |
+| Sleep Presence Decay Half-Life | Decay half-life used when sleep presence sensors are configured (duration picker; `0` uses the global sleep decay default)               | `0` (follow global) |
 | Minimum Prior Override      | The minimum prior probability to use, overriding learned patterns. Set to 0 to disable.                                                    | 0 (disabled)     |
 | Exclude from All Areas      | When enabled, this area won’t contribute to the [All Areas](../features/entities.md#all-areas-aggregation-device) or floor aggregate sensors. Useful for garages, driveways, and outdoor areas. | Disabled |
 

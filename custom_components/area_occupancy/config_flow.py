@@ -3980,8 +3980,6 @@ class AreaOccupancyConfigFlow(ConfigFlow, BaseOccupancyFlow, domain=DOMAIN):
                     ) from err
                 raise
 
-            async_trigger_area_discoveries(self.hass)
-
             # Each area becomes a config subentry so the integration page
             # lists them natively with their own reconfigure and delete.
             return self.async_create_entry(

@@ -42,24 +42,29 @@ from custom_components.area_occupancy.data.purpose import (
 from custom_components.area_occupancy.discovery import (
     DISCOVERABLE_SENSOR_KEYS,
     AreaDiscoveryOptions,
+    _map_sensor_key,
     _merge_discovered_additions,
     area_discovery_unique_id,
     async_track_discovery,
     async_trigger_area_discoveries,
     build_area_discovery_options,
     build_suggested_area_config,
+    discover_area_sensors,
     discover_eligible_areas,
     parse_tracked_auto_sensors,
     resolve_area_sensors,
     resolve_excluded_device_entity_ids,
 )
 from custom_components.area_occupancy.discovery_filters import (
+    SpecialExclusionContext,
     format_platform_source,
     is_light_power_sensor,
     normalize_excluded_platforms,
     split_platform_source,
 )
 from custom_components.area_occupancy.discovery_groups import (
+    expand_discovery_group,
+    expand_manual_group,
     group_contains_own_entity,
     is_own_entity,
 )
@@ -1098,6 +1103,34 @@ def test_registry_changes_refresh_and_cleanup() -> None:
         assert later.return_value.call_count == 2
 
 
+def test_debouncer_preserves_input_refresh_across_mixed_events() -> None:
+    """Coalescing entity/device updates with area registry updates keeps input refresh."""
+    hass, entry = Mock(), Mock()
+    refresh = AsyncMock()
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.iter_area_subentries",
+            return_value=[("id", {})],
+        ),
+        patch("custom_components.area_occupancy.discovery.async_call_later") as later,
+        patch(
+            "custom_components.area_occupancy.discovery.async_trigger_area_discoveries"
+        ) as mock_trigger,
+    ):
+        async_track_discovery(hass, entry, refresh)
+        listeners = {
+            call.args[0]: call.args[1] for call in hass.bus.async_listen.call_args_list
+        }
+        listeners[er.EVENT_ENTITY_REGISTRY_UPDATED](
+            SimpleNamespace(data={"action": "create"})
+        )
+        listeners[ar.EVENT_AREA_REGISTRY_UPDATED](SimpleNamespace(data={}))
+        asyncio.run(later.call_args.args[2](None))
+
+    refresh.assert_awaited_once()
+    mock_trigger.assert_called_once_with(hass)
+
+
 def test_registry_changes_still_trigger_area_discoveries_when_input_discovery_disabled() -> (
     None
 ):
@@ -1984,6 +2017,11 @@ def test_excluded_group_entity_not_expanded() -> None:
         device_class="motion",
     )
     member.device_id = "dev_hall"
+    other_room_pir = _reg_entry(
+        "binary_sensor.other_room_pir",
+        area_id="other_room",
+        device_class="motion",
+    )
     excluded_group = _reg_entry(
         "binary_sensor.hall_group",
         area_id="hallway",
@@ -1991,10 +2029,10 @@ def test_excluded_group_entity_not_expanded() -> None:
     )
     excluded_group.platform = "group"
     hass, registry, devices = _make_group_hass(
-        entities=[member, excluded_group],
+        entities=[member, other_room_pir, excluded_group],
         states={
             "binary_sensor.hall_group": {
-                "entity_id": [member.entity_id, "binary_sensor.other_room_pir"],
+                "entity_id": [member.entity_id, other_room_pir.entity_id],
             }
         },
     )
@@ -3031,3 +3069,466 @@ def test_reclassified_group_wrapping_untyped_group_with_diagnostic_member() -> N
 
     assert resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
     assert diag_beam.entity_id not in resolved[CONF_MOTION_SENSORS]
+
+
+def test_nested_typed_group_with_untyped_leaf_preserves_outer_mismatch() -> None:
+    """Nested typed groups wrapping untyped leaves propagate classification to outer checks."""
+    outer_occ = _reg_entry(
+        "binary_sensor.outer_occ", area_id="garage", device_class="occupancy"
+    )
+    inner_door = _reg_entry("binary_sensor.inner_door", device_class="door")
+    door_contact = _reg_entry("binary_sensor.door_contact")
+    hass, registry, devices = _make_group_hass(
+        entities=[outer_occ, inner_door, door_contact],
+        states={
+            outer_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: [inner_door.entity_id],
+            },
+            inner_door.entity_id: {
+                "device_class": "door",
+                ATTR_ENTITY_ID: [door_contact.entity_id],
+            },
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        auto_resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+        manual_resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [outer_occ.entity_id],
+            },
+        )
+
+    assert auto_resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+    assert CONF_DOOR_SENSORS not in auto_resolved
+    assert manual_resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+
+
+def test_manual_group_preserves_member_also_tracked_as_auto_added_when_disabled() -> (
+    None
+):
+    """Disabling discovery or domains expands manual groups after stripping stale auto entries."""
+    manual_group = _reg_entry("binary_sensor.manual_hall_group")
+    pir_1 = _reg_entry("binary_sensor.pir_1", area_id="hall", device_class="motion")
+    pir_2 = _reg_entry("binary_sensor.pir_2", device_class="motion")
+    hass, registry, devices = _make_group_hass(
+        entities=[manual_group, pir_1, pir_2],
+        states={
+            manual_group.entity_id: {
+                ATTR_ENTITY_ID: [pir_1.entity_id, pir_2.entity_id],
+            }
+        },
+    )
+    base_data = {
+        CONF_AREA_ID: "hall",
+        CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+        CONF_MOTION_SENSORS: [manual_group.entity_id, pir_1.entity_id],
+        CONF_AUTO_ADDED_SENSORS: {CONF_MOTION_SENSORS: [pir_1.entity_id]},
+    }
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        disabled_res = resolve_area_sensors(
+            hass,
+            {**base_data, CONF_AUTO_DISCOVER_SENSORS: False},
+        )
+        narrowed_res = resolve_area_sensors(
+            hass,
+            {
+                **base_data,
+                CONF_AUTO_DISCOVER_SENSORS: True,
+                CONF_AUTO_DISCOVER_DOMAINS: [CONF_DOOR_SENSORS],
+            },
+        )
+
+    assert disabled_res[CONF_MOTION_SENSORS] == [pir_1.entity_id, pir_2.entity_id]
+    assert disabled_res[CONF_AUTO_ADDED_SENSORS] == {}
+    assert narrowed_res[CONF_MOTION_SENSORS] == [pir_1.entity_id, pir_2.entity_id]
+    assert narrowed_res[CONF_AUTO_ADDED_SENSORS] == {}
+
+
+def test_expand_discovery_and_manual_groups_fallback_to_hass_without_registry() -> None:
+    """Group expanders resolve registry entries via hass when registry is None."""
+    own_entity = _reg_entry(
+        "binary_sensor.office_occupancy_status", device_class="occupancy"
+    )
+    own_entity.platform = "area_occupancy"
+    pir = _reg_entry("binary_sensor.office_pir", device_class="motion")
+    occ_group = _reg_entry(
+        "binary_sensor.office_occ_group", area_id="office", device_class="motion"
+    )
+    hass, registry, _ = _make_group_hass(
+        entities=[own_entity, pir, occ_group],
+        states={
+            occ_group.entity_id: {
+                "device_class": "motion",
+                ATTR_ENTITY_ID: [own_entity.entity_id, pir.entity_id],
+            }
+        },
+    )
+
+    with patch(
+        "custom_components.area_occupancy.discovery_filters.er.async_get",
+        return_value=registry,
+    ):
+        discovered = expand_discovery_group(
+            hass,
+            occ_group,
+            registry=None,
+            map_sensor_key=_map_sensor_key,
+            excluded_entity_ids=set(),
+            excluded_platforms=set(),
+            special_exclusions=SpecialExclusionContext(
+                exclude_remote_locks=False,
+                exclude_vehicle_detected=False,
+                exclude_occupancy_subzones=False,
+                garage_device_ids=frozenset(),
+                main_classes_by_device={},
+            ),
+        )
+        manual = expand_manual_group(
+            hass,
+            occ_group.entity_id,
+            expected_domain="binary_sensor",
+            expected_key=CONF_MOTION_SENSORS,
+            registry=None,
+            excluded_entity_ids=set(),
+            map_sensor_key=_map_sensor_key,
+        )
+
+    assert [member.entity_id for member in discovered] == [pir.entity_id]
+    assert manual == [pir.entity_id]
+
+
+def test_sensor_group_expansion_mixed_classes_and_light_power() -> None:
+    """Sensor groups preserve mixed classes and filter light-power members on expand."""
+    temp = _reg_entry("sensor.temp_raw", device_class="temperature")
+    humidity = _reg_entry("sensor.hum_raw", device_class="humidity")
+    mixed_env_group = _reg_entry(
+        "sensor.mixed_env_group", area_id="office", device_class="temperature"
+    )
+
+    lamp_power = _reg_entry("sensor.lamp_power", device_class="power")
+    lamp_power.platform = "powercalc"
+    outlet_power = _reg_entry("sensor.outlet_power", device_class="power")
+    power_group = _reg_entry(
+        "sensor.power_group", area_id="office", device_class="power"
+    )
+
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            temp,
+            humidity,
+            mixed_env_group,
+            lamp_power,
+            outlet_power,
+            power_group,
+        ],
+        states={
+            mixed_env_group.entity_id: {
+                "device_class": "temperature",
+                ATTR_ENTITY_ID: [temp.entity_id, humidity.entity_id],
+            },
+            power_group.entity_id: {
+                "device_class": "power",
+                ATTR_ENTITY_ID: [lamp_power.entity_id, outlet_power.entity_id],
+            },
+            lamp_power.entity_id: {"source_domain": "light"},
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "office", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+
+    assert resolved[CONF_TEMPERATURE_SENSORS] == [mixed_env_group.entity_id]
+    assert CONF_HUMIDITY_SENSORS not in resolved
+    assert resolved[CONF_POWER_SENSORS] == [outlet_power.entity_id]
+
+
+@pytest.mark.parametrize(
+    "branch_order",
+    [
+        ["binary_sensor.inner_occ", "binary_sensor.inner_door"],
+        ["binary_sensor.inner_door", "binary_sensor.inner_occ"],
+    ],
+)
+def test_diamond_group_with_untyped_leaf_is_order_independent(
+    branch_order: list[str],
+) -> None:
+    """Diamond groups preserve outer mismatches regardless of subgroup ordering."""
+    outer_occ = _reg_entry(
+        "binary_sensor.outer_occ", area_id="garage", device_class="occupancy"
+    )
+    inner_occ = _reg_entry("binary_sensor.inner_occ", device_class="occupancy")
+    inner_door = _reg_entry("binary_sensor.inner_door", device_class="door")
+    shared_leaf = _reg_entry("binary_sensor.shared")
+    hass, registry, devices = _make_group_hass(
+        entities=[outer_occ, inner_occ, inner_door, shared_leaf],
+        states={
+            outer_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: branch_order,
+            },
+            inner_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: [shared_leaf.entity_id],
+            },
+            inner_door.entity_id: {
+                "device_class": "door",
+                ATTR_ENTITY_ID: [shared_leaf.entity_id],
+            },
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        auto_resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+        manual_resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [outer_occ.entity_id],
+            },
+        )
+
+    assert auto_resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+    assert CONF_DOOR_SENSORS not in auto_resolved
+    assert manual_resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+
+
+@pytest.mark.parametrize(
+    "branch_order",
+    [
+        ["binary_sensor.inner_occ", "binary_sensor.inner_door"],
+        ["binary_sensor.inner_door", "binary_sensor.inner_occ"],
+    ],
+)
+def test_diamond_group_through_intermediate_untyped_group_is_order_independent(
+    branch_order: list[str],
+) -> None:
+    """Intermediate untyped groups preserve branch classifications for outer mismatch checks."""
+    outer_occ = _reg_entry(
+        "binary_sensor.outer_occ", area_id="garage", device_class="occupancy"
+    )
+    outer_legacy = _reg_entry("group.outer_garage")
+    mid_group = _reg_entry("group.mid_garage")
+    inner_occ = _reg_entry("binary_sensor.inner_occ", device_class="occupancy")
+    inner_door = _reg_entry("binary_sensor.inner_door", device_class="door")
+    shared_leaf = _reg_entry("binary_sensor.shared")
+    hass, registry, devices = _make_group_hass(
+        entities=[
+            outer_occ,
+            outer_legacy,
+            mid_group,
+            inner_occ,
+            inner_door,
+            shared_leaf,
+        ],
+        states={
+            outer_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: [mid_group.entity_id],
+            },
+            outer_legacy.entity_id: {
+                ATTR_ENTITY_ID: [mid_group.entity_id],
+            },
+            mid_group.entity_id: {
+                ATTR_ENTITY_ID: branch_order,
+            },
+            inner_occ.entity_id: {
+                "device_class": "occupancy",
+                ATTR_ENTITY_ID: [shared_leaf.entity_id],
+            },
+            inner_door.entity_id: {
+                "device_class": "door",
+                ATTR_ENTITY_ID: [shared_leaf.entity_id],
+            },
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        auto_resolved = resolve_area_sensors(
+            hass,
+            {CONF_AREA_ID: "garage", CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND},
+        )
+        manual_typed = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [outer_occ.entity_id],
+            },
+        )
+        manual_legacy = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "garage",
+                CONF_AUTO_DISCOVER_SENSORS: False,
+                CONF_EXPAND_GROUPS: GroupExpansionMode.EXPAND,
+                CONF_MOTION_SENSORS: [outer_legacy.entity_id],
+            },
+        )
+
+    assert auto_resolved[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+    assert CONF_DOOR_SENSORS not in auto_resolved
+    assert manual_typed[CONF_MOTION_SENSORS] == [outer_occ.entity_id]
+    assert manual_legacy[CONF_MOTION_SENSORS] == [outer_legacy.entity_id]
+
+
+def test_discovery_degrades_cleanly_when_registries_uninitialized() -> None:
+    """Discovery helpers return empty results instead of raising when registries are missing."""
+    bare_hass = Mock()
+    assert discover_area_sensors(bare_hass, "office") == {}
+    assert discover_eligible_areas(bare_hass) == []
+
+    resolved = resolve_area_sensors(
+        bare_hass,
+        {
+            CONF_AREA_ID: "office",
+            CONF_AUTO_DISCOVER_SENSORS: True,
+            CONF_MOTION_SENSORS: ["binary_sensor.manual_pir"],
+        },
+    )
+    assert resolved[CONF_MOTION_SENSORS] == ["binary_sensor.manual_pir"]
+
+
+def test_resolve_area_sensors_moves_auto_added_sensor_across_keys_on_reclassify() -> (
+    None
+):
+    """Changing an entity's device_class moves it and its provenance across sensor keys."""
+    reclassified = _reg_entry(
+        "sensor.combo_probe", area_id="office", device_class="humidity"
+    )
+    hass, registry, devices = _make_group_hass(entities=[reclassified], states={})
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.er.async_get",
+            return_value=registry,
+        ),
+        patch(
+            "custom_components.area_occupancy.discovery.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        resolved = resolve_area_sensors(
+            hass,
+            {
+                CONF_AREA_ID: "office",
+                CONF_TEMPERATURE_SENSORS: [reclassified.entity_id],
+                CONF_AUTO_ADDED_SENSORS: {
+                    CONF_TEMPERATURE_SENSORS: [reclassified.entity_id]
+                },
+            },
+        )
+
+    assert resolved[CONF_TEMPERATURE_SENSORS] == []
+    assert resolved[CONF_HUMIDITY_SENSORS] == [reclassified.entity_id]
+    assert resolved[CONF_AUTO_ADDED_SENSORS] == {
+        CONF_HUMIDITY_SENSORS: [reclassified.entity_id]
+    }
+
+
+def test_async_trigger_area_discoveries_initial_setup_and_ignored_flow_abort() -> None:
+    """Discovery trigger creates flows on initial setup and aborts newly ignored flows."""
+    hass = Mock()
+    hass.data = {}
+    ignored_entry = SimpleNamespace(
+        source=SOURCE_IGNORE,
+        unique_id=area_discovery_unique_id("garage"),
+        data={},
+        options={},
+        subentries={},
+    )
+    hass.config_entries.async_entries.return_value = [ignored_entry]
+    hass.config_entries.flow.async_progress_by_handler.return_value = [
+        {
+            "flow_id": "flow_ignored_garage",
+            "context": {
+                "source": SOURCE_INTEGRATION_DISCOVERY,
+                "unique_id": area_discovery_unique_id("garage"),
+            },
+        }
+    ]
+
+    with (
+        patch(
+            "custom_components.area_occupancy.discovery.discover_eligible_areas",
+            return_value=[
+                {
+                    CONF_AREA_ID: "office",
+                    CONF_PURPOSE: infer_purpose_from_name("Office"),
+                }
+            ],
+        ) as mock_discover,
+        patch(
+            "custom_components.area_occupancy.discovery.discovery_flow.async_create_flow"
+        ) as mock_create_flow,
+    ):
+        async_trigger_area_discoveries(hass)
+
+    assert mock_discover.call_args.kwargs["excluded_area_ids"] == {"garage"}
+    assert mock_discover.call_args.kwargs["global_options"] is None
+    mock_create_flow.assert_called_once()
+    assert mock_create_flow.call_args.kwargs["data"][CONF_AREA_ID] == "office"
+    hass.config_entries.flow.async_abort.assert_called_once_with("flow_ignored_garage")

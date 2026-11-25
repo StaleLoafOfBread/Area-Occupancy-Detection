@@ -100,6 +100,8 @@ def member_matches_group_classification(
     expected_domain: str,
     expected_key: str,
     map_sensor_key: Callable[[str, str | None], str | None],
+    fallback_domain: str | None = None,
+    fallback_device_class: str | None = None,
 ) -> bool:
     """Return True if a member's own classification matches the enclosing group."""
     if member_entry is not None:
@@ -108,11 +110,27 @@ def member_matches_group_classification(
     else:
         state, attrs = entity_state_and_attributes(hass, member_id)
         if state is None:
+            if fallback_device_class is not None:
+                return (
+                    map_sensor_key(
+                        fallback_domain or entity_domain(member_id),
+                        fallback_device_class,
+                    )
+                    == expected_key
+                )
             return True
         member_domain = entity_domain(member_id)
         member_dc = resolve_entry_device_class(hass, None, member_id, attrs=attrs)
 
     if member_dc is None:
+        if fallback_device_class is not None:
+            return (
+                map_sensor_key(
+                    fallback_domain or member_domain,
+                    fallback_device_class,
+                )
+                == expected_key
+            )
         return member_domain == expected_domain
     return map_sensor_key(member_domain, member_dc) == expected_key
 
@@ -205,22 +223,22 @@ def _expand_discovery_node(
     child_fb_dc = group_dc if group_dc is not None else fallback_device_class
     next_visited = visited | {entity_id}
 
-    deduped_children: dict[str, ResolvedGroupMember] = {}
+    all_children: list[ResolvedGroupMember] = []
     for member_id in members:
-        member_entry = lookup_registry_entry(member_id, ctx.registry)
-        for resolved in _expand_discovery_node(
-            hass,
-            member_id,
-            member_entry,
-            required_domain=child_required_domain,
-            fallback_domain=child_fb_domain,
-            fallback_device_class=child_fb_dc,
-            visited=next_visited,
-            ctx=ctx,
-        ):
-            deduped_children.setdefault(resolved.entity_id, resolved)
+        member_entry = lookup_registry_entry(member_id, ctx.registry, hass=hass)
+        all_children.extend(
+            _expand_discovery_node(
+                hass,
+                member_id,
+                member_entry,
+                required_domain=child_required_domain,
+                fallback_domain=child_fb_domain,
+                fallback_device_class=child_fb_dc,
+                visited=next_visited,
+                ctx=ctx,
+            )
+        )
 
-    resolved_children = list(deduped_children.values())
     if (
         group_domain != GROUP_DOMAIN
         and group_dc is not None
@@ -233,8 +251,10 @@ def _expand_discovery_node(
                 expected_domain=group_domain,
                 expected_key=group_key,
                 map_sensor_key=ctx.map_sensor_key,
+                fallback_domain=child.fallback_domain,
+                fallback_device_class=child.fallback_device_class,
             )
-            for child in resolved_children
+            for child in all_children
         )
     ):
         if group_contains_own_entity(hass, entity_id, ctx.registry):
@@ -248,12 +268,22 @@ def _expand_discovery_node(
         ]
 
     if visited:
-        return resolved_children
-    return [
-        child
-        for child in resolved_children
-        if not (child.entry is not None and child.entry.entity_category is not None)
-    ]
+        deduped_nested: dict[
+            tuple[str, str | None, str | None], ResolvedGroupMember
+        ] = {}
+        for child in all_children:
+            deduped_nested.setdefault(
+                (child.entity_id, child.fallback_domain, child.fallback_device_class),
+                child,
+            )
+        return list(deduped_nested.values())
+
+    deduped_children: dict[str, ResolvedGroupMember] = {}
+    for child in all_children:
+        if child.entry is not None and child.entry.entity_category is not None:
+            continue
+        deduped_children.setdefault(child.entity_id, child)
+    return list(deduped_children.values())
 
 
 def expand_discovery_group(
@@ -293,11 +323,13 @@ def _expand_manual_node(
     expected_domain: str | None,
     expected_key: str,
     required_domain: str | None,
+    fallback_domain: str | None,
+    fallback_device_class: str | None,
     registry: er.EntityRegistry | None,
     excluded_entity_ids: Collection[str],
     map_sensor_key: Callable[[str, str | None], str | None],
     visited: frozenset[str],
-) -> list[str]:
+) -> list[tuple[str, str | None, str | None]]:
     """Recursively expand a manually configured group while honoring classification."""
     if entity_id in visited or entity_id in excluded_entity_ids:
         return []
@@ -308,9 +340,9 @@ def _expand_manual_node(
             return []
         if required_domain is not None and entity_domain(entity_id) != required_domain:
             return []
-        return [entity_id]
+        return [(entity_id, fallback_domain, fallback_device_class)]
 
-    entry = lookup_registry_entry(entity_id, registry)
+    entry = lookup_registry_entry(entity_id, registry, hass=hass)
     group_domain = entry.domain if entry is not None else entity_domain(entity_id)
     group_dc = resolve_entry_device_class(hass, entry, entity_id)
     group_key = map_sensor_key(group_domain, group_dc)
@@ -325,25 +357,27 @@ def _expand_manual_node(
     child_required_domain = required_domain
     if child_required_domain is None and group_domain != GROUP_DOMAIN:
         child_required_domain = group_domain
+    child_fb_domain = group_domain if group_dc is not None else fallback_domain
+    child_fb_dc = group_dc if group_dc is not None else fallback_device_class
 
     next_visited = visited | {entity_id}
-    deduped_children: list[str] = []
-    seen: set[str] = set()
+    all_children: list[tuple[str, str | None, str | None]] = []
     for member_id in members:
-        for resolved_id in _expand_manual_node(
-            hass,
-            member_id,
-            expected_domain=expected_domain,
-            expected_key=expected_key,
-            required_domain=child_required_domain,
-            registry=registry,
-            excluded_entity_ids=excluded_entity_ids,
-            map_sensor_key=map_sensor_key,
-            visited=next_visited,
-        ):
-            if resolved_id not in seen:
-                seen.add(resolved_id)
-                deduped_children.append(resolved_id)
+        all_children.extend(
+            _expand_manual_node(
+                hass,
+                member_id,
+                expected_domain=expected_domain,
+                expected_key=expected_key,
+                required_domain=child_required_domain,
+                fallback_domain=child_fb_domain,
+                fallback_device_class=child_fb_dc,
+                registry=registry,
+                excluded_entity_ids=excluded_entity_ids,
+                map_sensor_key=map_sensor_key,
+                visited=next_visited,
+            )
+        )
 
     check_domain = (
         expected_domain
@@ -359,12 +393,14 @@ def _expand_manual_node(
         not member_matches_group_classification(
             hass,
             member_id,
-            member_entry=lookup_registry_entry(member_id, registry),
+            member_entry=lookup_registry_entry(member_id, registry, hass=hass),
             expected_domain=check_domain,
             expected_key=check_key,
             map_sensor_key=map_sensor_key,
+            fallback_domain=member_fb_domain,
+            fallback_device_class=member_fb_dc,
         )
-        for member_id in deduped_children
+        for member_id, member_fb_domain, member_fb_dc in all_children
     ):
         if group_contains_own_entity(hass, entity_id, registry):
             return []
@@ -374,9 +410,14 @@ def _expand_manual_node(
             and (visited or group_domain != GROUP_DOMAIN)
         ):
             return []
-        return [entity_id]
+        return [(entity_id, fallback_domain, fallback_device_class)]
 
-    return deduped_children
+    if visited:
+        return list(dict.fromkeys(all_children))
+    deduped_children: dict[str, tuple[str, str | None, str | None]] = {}
+    for resolved_member in all_children:
+        deduped_children.setdefault(resolved_member[0], resolved_member)
+    return list(deduped_children.values())
 
 
 def expand_manual_group(
@@ -390,14 +431,19 @@ def expand_manual_group(
     map_sensor_key: Callable[[str, str | None], str | None],
 ) -> list[str]:
     """Expand a manually selected group entity while keeping mismatched groups intact."""
-    return _expand_manual_node(
-        hass,
-        entity_id,
-        expected_domain=expected_domain,
-        expected_key=expected_key,
-        required_domain=expected_domain,
-        registry=registry,
-        excluded_entity_ids=excluded_entity_ids,
-        map_sensor_key=map_sensor_key,
-        visited=frozenset(),
-    )
+    return [
+        member_id
+        for member_id, _, _ in _expand_manual_node(
+            hass,
+            entity_id,
+            expected_domain=expected_domain,
+            expected_key=expected_key,
+            required_domain=expected_domain,
+            fallback_domain=None,
+            fallback_device_class=None,
+            registry=registry,
+            excluded_entity_ids=excluded_entity_ids,
+            map_sensor_key=map_sensor_key,
+            visited=frozenset(),
+        )
+    ]

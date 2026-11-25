@@ -227,6 +227,22 @@ def test_strategy_uses_frontend_translations_instead_of_hardcoded_defaults() -> 
     assert "TRANSLATION_MAX_RETRIES" in source
     assert "!areasById?.has(id)" in source
     assert "this._fetchToken += 1;" in source
+    assert 'mediaQuery: "(width <= 600px)"' in source
+    assert 'mediaQuery: "(width > 600px) and (width < 1024px)"' in source
+    assert 'mediaQuery: "(width >= 1024px)"' in source
+    assert "issue.entity_id ? " in source
+    assert "memberIds.some(" in source
+    assert "fetchTranslationsWithFallback(hass, TRANSLATION_CATEGORY.COMMON)" in source
+    assert "leftHasLevel !== rightHasLevel" in source
+    assert (
+        "defineElementOnce(PROBABILITY_CARD_TAG, AreaOccupancyProbabilityCard)"
+        in source
+    )
+    assert "defineElementOnce(STRATEGY_TAG, AreaOccupancyDashboardStrategy)" in source
+    assert (
+        "customElements.whenDefined(HA_ROOT_TAG).then(registerDashboardStrategy)"
+        in source
+    )
     assert "DASHBOARD_DESCRIPTION:" not in source
     assert "UNASSIGNED_FLOOR_LABEL:" not in source
     assert "PROBABILITY_CARD_TITLE:" not in source

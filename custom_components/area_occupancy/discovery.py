@@ -477,7 +477,7 @@ def _build_area_discovery_filters(
 
 def _collect_area_entries(
     registry: er.EntityRegistry,
-    devices: dr.DeviceRegistry,
+    devices: dr.DeviceRegistry | None,
     area_id: str,
 ) -> list[tuple[er.RegistryEntry, dr.DeviceEntry | None]]:
     """Return sorted ``(entry, device)`` pairs belonging to ``area_id``."""
@@ -486,10 +486,18 @@ def _collect_area_entries(
         if entry.area_id is not None:
             if entry.area_id != area_id:
                 continue
-            device = devices.async_get(entry.device_id) if entry.device_id else None
+            device = (
+                devices.async_get(entry.device_id)
+                if devices is not None and entry.device_id
+                else None
+            )
             area_entries.append((entry, device))
             continue
-        device = devices.async_get(entry.device_id) if entry.device_id else None
+        device = (
+            devices.async_get(entry.device_id)
+            if devices is not None and entry.device_id
+            else None
+        )
         if device is not None and device.area_id == area_id:
             area_entries.append((entry, device))
     area_entries.sort(key=lambda item: item[0].entity_id)
@@ -623,8 +631,10 @@ def discover_area_sensors(
         return {}
 
     filters = _build_area_discovery_filters(hass, effective_options)
-    registry = er.async_get(hass)
-    devices = dr.async_get(hass)
+    registry = _get_entity_registry(hass)
+    if registry is None:
+        return {}
+    devices = _get_device_registry(hass)
     area_entries = _collect_area_entries(registry, devices, area_id)
     if not area_entries:
         return {}
@@ -835,23 +845,6 @@ def _merge_discovered_additions(
     return resolved_auto
 
 
-def _reconcile_discovered_sensors(
-    resolved: dict[str, Any],
-    tracked_auto: dict[str, list[str]],
-    discovered: dict[str, list[str]],
-    excluded: set[str],
-    *,
-    preserve_empty_key: bool,
-) -> None:
-    """Merge discovered additions while stripping stale auto-added entities."""
-    _strip_stale_auto_sensors(resolved, tracked_auto, discovered)
-    cleaned_auto = _merge_discovered_additions(
-        resolved, tracked_auto, discovered, excluded
-    )
-    if cleaned_auto or preserve_empty_key:
-        resolved[CONF_AUTO_ADDED_SENSORS] = cleaned_auto
-
-
 def resolve_area_sensors(
     hass: HomeAssistant,
     data: Mapping[str, Any],
@@ -884,9 +877,6 @@ def resolve_area_sensors(
     excluded = _resolve_all_excluded_entities(
         hass, data.get(CONF_EXCLUDED_SENSORS), data, global_options
     )
-
-    if expand_groups:
-        _expand_manual_groups(hass, resolved, excluded, tracked_auto)
     _strip_excluded_entities(resolved, tracked_auto, excluded)
 
     enabled_domains = get_enabled_discovery_domains(data)
@@ -898,6 +888,8 @@ def resolve_area_sensors(
         _clear_tracked_auto_sensors(
             resolved, tracked_auto, preserve_empty_key=preserve_empty_key
         )
+        if expand_groups:
+            _expand_manual_groups(hass, resolved, excluded)
         return resolved
 
     discovered = discover_area_sensors(
@@ -910,13 +902,14 @@ def resolve_area_sensors(
             global_options=global_options,
         ),
     )
-    _reconcile_discovered_sensors(
-        resolved,
-        tracked_auto,
-        discovered,
-        excluded,
-        preserve_empty_key=preserve_empty_key,
+    _strip_stale_auto_sensors(resolved, tracked_auto, discovered)
+    if expand_groups:
+        _expand_manual_groups(hass, resolved, excluded, tracked_auto)
+    cleaned_auto = _merge_discovered_additions(
+        resolved, tracked_auto, discovered, excluded
     )
+    if cleaned_auto or preserve_empty_key:
+        resolved[CONF_AUTO_ADDED_SENSORS] = cleaned_auto
     return resolved
 
 
@@ -998,7 +991,10 @@ def build_suggested_area_config(
 
 def _iter_sorted_areas(hass: HomeAssistant) -> list[Any]:
     """Return Home Assistant area registry entries sorted case-insensitively by name."""
-    area_reg = ar.async_get(hass)
+    try:
+        area_reg = ar.async_get(hass)
+    except (AttributeError, KeyError, RuntimeError, TypeError):
+        return []
     list_areas = getattr(area_reg, _ATTR_ASYNC_LIST_AREAS, None)
     areas_attr: Any = getattr(area_reg, _ATTR_AREAS, None)
     raw_areas: Iterable[Any] = (

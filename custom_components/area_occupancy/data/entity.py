@@ -1203,12 +1203,16 @@ class EntityFactory:
             sleep_start = None
             sleep_end = None
             sleep_override_provider = None
+            uses_purpose_default = None
         else:
             sleep_start = getattr(
                 self.coordinator.integration_config, "sleep_start", None
             )
             sleep_end = getattr(self.coordinator.integration_config, "sleep_end", None)
             purpose_for_decay = getattr(self.config, "purpose", None)
+            uses_purpose_default = getattr(
+                getattr(self.config, "decay", None), "uses_purpose_default", None
+            )
             # Only Sleeping-purpose areas consult the sleep sensor (Decay
             # returns early for any purpose without an awake_half_life).
             sleep_override_provider = (
@@ -1225,6 +1229,7 @@ class EntityFactory:
             sleep_start=sleep_start,
             sleep_end=sleep_end,
             sleep_override_provider=sleep_override_provider,
+            uses_purpose_default=uses_purpose_default,
         )
 
         # Motion sensors use configured likelihoods (user-configurable per area)

@@ -3721,10 +3721,10 @@ def _register_area_with_motion(
     return area.id
 
 
-async def test_user_step_does_not_auto_add_areas_and_triggers_discovery(
+async def test_user_step_does_not_auto_add_areas_or_trigger_premature_discovery(
     hass: HomeAssistant,
 ) -> None:
-    """Initial user setup opens the first-area wizard without auto-adding all areas."""
+    """Initial user setup opens the first-area wizard without triggering premature discovery."""
     kitchen_id = _register_area_with_motion(
         hass, "Kitchen", "binary_sensor.kitchen_motion"
     )
@@ -3753,7 +3753,7 @@ async def test_user_step_does_not_auto_add_areas_and_triggers_discovery(
     assert len(subentries) == 1
     assert subentries[0]["data"][CONF_AREA_ID] == kitchen_id
     assert subentries[0]["subentry_type"] == SUBENTRY_TYPE_AREA
-    mock_trigger.assert_called_once_with(hass)
+    mock_trigger.assert_not_called()
 
 
 async def test_init_area_wizard_suggests_next_eligible_area(
